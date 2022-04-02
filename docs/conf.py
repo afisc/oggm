@@ -439,7 +439,7 @@ def write_index():
     except FileExistsError:
         pass
 
-    text = text_version if '+' not in oggm.__version__ else text_dev
+    text = text_version
 
     with open(filename, 'w') as f:
         f.write(text)
