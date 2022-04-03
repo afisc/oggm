@@ -412,9 +412,9 @@ intersphinx_mapping = {
 
 # -- OGGM Stuffs ----------------------------------------------------
 
-text_version = ('.. warning:: \n\n'
+text_version = ('.. note:: \n\n'
                 '  **This is the model documentation for users and developers '
-                'as of version {}**. '
+                'of the stable OGGM version (v{})**. '
                 'For the documentation of the latest (cutting-edge) '
                 'repository version, visit `docs.oggm.org/en/latest '
                 '<http://docs.oggm.org/en/latest/>`_.\n'
