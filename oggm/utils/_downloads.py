@@ -1286,7 +1286,7 @@ def get_prepro_base_url(base_url=None, rgi_version=None, border=None,
         border = cfg.PARAMS['border']
 
     url = base_url
-    url += 'RGI{}/'.format(rgi_version)
+    url += 'RGI{}/'.format(rgi_version + '_30m')
     url += 'b_{:03d}/'.format(int(border))
     url += 'L{:d}/'.format(prepro_level)
     return url
