@@ -243,7 +243,7 @@ def gdir_from_prepro(entity, from_prepro_level=None,
     try:
         rid = entity.RGIId
     except AttributeError:
-        rid = entity
+        rid = entity.rgi_id
 
     tar_base = utils.get_prepro_gdir(prepro_rgi_version, rid, prepro_border,
                                      from_prepro_level, base_url=base_url)
