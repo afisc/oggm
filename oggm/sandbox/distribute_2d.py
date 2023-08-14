@@ -292,9 +292,11 @@ def distribute_thickness_from_simulation(gdir, input_filesuffix='',
     with xr.open_dataset(gdir.get_filepath('gridded_data')) as ds:
         ds = ds.load()
 
-    ds['time'] = dg['time']
+    # ds['time'] = dg['time']
     vn = "simulation_distributed_thickness" + input_filesuffix
     if vn in ds:
         warnings.warn(f'Overwriting existing variable {vn}')
-    ds[vn] = (('time', 'y', 'x',), out_thick)
-    ds.to_netcdf(gdir.get_filepath('gridded_data'))
+    # ds[vn] = (('time', 'y', 'x',), out_thick)
+    dg[vn] = (('time', 'y', 'x',), out_thick)
+    # ds.to_netcdf(gdir.get_filepath('gridded_data'))
+    dg.to_netcdf('distributed_glacier_data.nc')
