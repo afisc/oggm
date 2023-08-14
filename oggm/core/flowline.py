@@ -1214,6 +1214,44 @@ class FlowlineModel(object):
                     desc = 'Part of the series which are spinup'
                     ds['is_fixed_geometry_spinup'].attrs['description'] = desc
                     ds['is_fixed_geometry_spinup'].attrs['unit'] = '-'
+                if 'flux_divergence' in ovars_fl:
+                    # We need dhdt and climatic_mb to calculate divergence
+                    if 'dhdt' not in ovars_fl:
+                        ovars_fl.append('dhdt')
+                    if 'climatic_mb' not in ovars_fl:
+                        ovars_fl.append('climatic_mb')
+
+                    ds['flux_divergence_myr'] = (('time', 'dis_along_flowline'),
+                                                 width * np.NaN)
+                    desc = 'Ice-flux divergence'
+                    ds['flux_divergence_myr'].attrs['description'] = desc
+                    ds['flux_divergence_myr'].attrs['unit'] = 'm yr-1'
+                if 'climatic_mb' in ovars_fl:
+                    # We need dhdt to define where to calculate climatic_mb
+                    if 'dhdt' not in ovars_fl:
+                        ovars_fl.append('dhdt')
+
+                    ds['climatic_mb_myr'] = (('time', 'dis_along_flowline'),
+                                             width * np.NaN)
+                    desc = 'Climatic mass balance forcing'
+                    ds['climatic_mb_myr'].attrs['description'] = desc
+                    ds['climatic_mb_myr'].attrs['unit'] = 'm yr-1'
+
+                    # needed for the calculation of mb at start of period
+                    surface_h_previous = {}
+                    for fl_id, fl in enumerate(self.fls):
+                        surface_h_previous[fl_id] = fl.surface_h
+                if 'dhdt' in ovars_fl:
+                    ds['dhdt_myr'] = (('time', 'dis_along_flowline'),
+                                      width * np.NaN)
+                    desc = 'Thickness change'
+                    ds['dhdt_myr'].attrs['description'] = desc
+                    ds['dhdt_myr'].attrs['unit'] = 'm yr-1'
+
+                    # needed for the calculation of dhdt
+                    thickness_previous_dhdt = {}
+                    for fl_id, fl in enumerate(self.fls):
+                        thickness_previous_dhdt[fl_id] = fl.thick
 
         # First deal with spinup (we compute volume change only)
         if do_fixed_spinup:
@@ -1269,6 +1307,47 @@ class FlowlineModel(object):
                             var = self.u_stag[fl_id]
                             val = (var[1:fl.nx + 1] + var[:fl.nx]) / 2 * self._surf_vel_fac
                             ds['ice_velocity_myr'].data[j, :] = val * cfg.SEC_IN_YEAR
+                        if 'dhdt' in ovars_fl and (yr > self.y0):
+                            # dhdt can only be computed after one year
+                            val = fl.thick - thickness_previous_dhdt[fl_id]
+                            ds['dhdt_myr'].data[j, :] = val
+                            thickness_previous_dhdt[fl_id] = fl.thick
+                        if 'climatic_mb' in ovars_fl and (yr > self.y0):
+                            # yr - 1 to use the mb which lead to the current
+                            # state, also using previous surface height
+                            val = self.get_mb(surface_h_previous[fl_id],
+                                              self.yr - 1,
+                                              fl_id=fl_id)
+                            # only save climatic mb where dhdt is non zero,
+                            # isclose for avoiding numeric represention artefacts
+                            dhdt_zero = np.isclose(ds['dhdt_myr'].data[j, :],
+                                                   0.)
+                            ds['climatic_mb_myr'].data[j, :] = np.where(
+                                dhdt_zero,
+                                0.,
+                                val * cfg.SEC_IN_YEAR)
+                            surface_h_previous[fl_id] = fl.surface_h
+                        if 'flux_divergence' in ovars_fl and (yr > self.y0):
+                            # calculated after the formula dhdt = mb + flux_div
+                            val = ds['dhdt_myr'].data[j, :] -\
+                                  ds['climatic_mb_myr'].data[j, :]
+                            # special treatment for retreating: If the glacier
+                            # terminus is getting ice free it means the
+                            # climatic mass balance is more negative than the
+                            # available ice to melt. In this case we can not
+                            # calculate the flux divergence with this method
+                            # exactly, we just can say it was smaller to
+                            # compensate the very negative climatic mb.
+                            # To avoid large spikes at the terminus in the
+                            # calculated flux divergence we smooth this values
+                            # with an (arbitrary) factor of 0.1.
+                            has_become_ice_free = np.logical_and(
+                                np.isclose(fl.thick, 0.),
+                                ds['dhdt_myr'].data[j, :] < 0.
+                            )
+                            fac = np.where(has_become_ice_free, 0.1, 1.)
+                            ds['flux_divergence_myr'].data[j, :] = val * fac
+
                 # j is the yearly index in case we have monthly output
                 # we have to count it ourselves
                 j += 1
@@ -1450,6 +1529,29 @@ def flux_gate_with_build_up(year, flux_value=None, flux_gate_yr=None):
     return flux_value * utils.clip_scalar(fac, 0, 1)
 
 
+def k_calving_law(model, flowline, last_above_wl):
+    """Compute calving from the model state using the k-calving law.
+
+    Currently this still assumes that the model has an attribute
+    called "calving_k", which might be changed in the future.
+
+    Parameters
+    ----------
+    model : oggm.core.flowline.FlowlineModel
+        the model instance calling the function
+    flowline : oggm.core.flowline.Flowline
+        the instance of the flowline object on which the calving law is called
+    last_above_wl : int
+        the index of the last pixel above water (in case you need to know
+        where it is).
+    """
+    h = flowline.thick[last_above_wl]
+    d = h - (flowline.surface_h[last_above_wl] - model.water_level)
+    k = model.calving_k
+    q_calving = k * d * h * flowline.widths_m[last_above_wl]
+    return q_calving
+
+
 class FluxBasedModel(FlowlineModel):
     """The flowline model used by OGGM in production.
 
@@ -1468,8 +1570,9 @@ class FluxBasedModel(FlowlineModel):
                  fs=0., inplace=False, fixed_dt=None, cfl_number=None,
                  min_dt=None, flux_gate_thickness=None,
                  flux_gate=None, flux_gate_build_up=100,
-                 do_kcalving=None, calving_k=None, calving_use_limiter=None,
-                 calving_limiter_frac=None, water_level=None,
+                 do_kcalving=None, calving_k=None, calving_law=k_calving_law,
+                 calving_use_limiter=None, calving_limiter_frac=None,
+                 water_level=None,
                  **kwargs):
         """Instantiate the model.
 
@@ -1532,6 +1635,10 @@ class FluxBasedModel(FlowlineModel):
         do_kcalving : bool
             switch on the k-calving parameterisation. Ignored if not a
             tidewater glacier. Use the option from PARAMS per default
+        calving_law : func
+             option to use another calving law. This is a temporary workaround
+             to test other calving laws, and the system might be improved in
+             future OGGM versions.
         calving_k : float
             the calving proportionality constant (units: yr-1). Use the
             one from PARAMS per default
@@ -1569,6 +1676,7 @@ class FluxBasedModel(FlowlineModel):
         # Calving params
         if do_kcalving is None:
             do_kcalving = cfg.PARAMS['use_kcalving_for_run']
+        self.calving_law = calving_law
         self.do_calving = do_kcalving and self.is_tidewater
         if calving_k is None:
             calving_k = cfg.PARAMS['calving_k']
@@ -1824,10 +1932,8 @@ class FluxBasedModel(FlowlineModel):
             section = fl.section
 
             # Calving law
-            h = fl.thick[last_above_wl]
-            d = h - (fl.surface_h[last_above_wl] - self.water_level)
-            k = self.calving_k
-            q_calving = k * d * h * fl.widths_m[last_above_wl]
+            q_calving = self.calving_law(self, fl, last_above_wl)
+
             # Add to the bucket and the diagnostics
             fl.calving_bucket_m3 += q_calving * dt
             self.calving_m3_since_y0 += q_calving * dt
