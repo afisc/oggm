@@ -1,6 +1,7 @@
 import logging
 import warnings
 
+import os
 import oggm
 import oggm.cfg as cfg
 from oggm import utils
@@ -9,7 +10,7 @@ import numpy as np
 import xarray as xr
 from scipy import ndimage
 from scipy.stats import mstats
-from oggm.core.gis import gaussian_blur
+from oggm.core.gis import gaussian_blur, get_dem_for_grid, GriddedNcdfFile, process_dem
 from oggm.utils import ncDataset, entity_task
 import matplotlib.pyplot as plt
 
@@ -416,3 +417,107 @@ def distribute_thickness_from_simulation(gdir,
         return ds, out_df
 
     return ds
+
+
+def combine_distributed_thickness(gdirs, output_folder, suffix='', source=None):
+    """
+    This function takes a list of glacier directories that have a
+    distributed_thickness.
+
+    Parameters
+    ----------
+    gdirs : list of :py:class:`oggm.GlacierDirectory` objects
+        The glacier directories which should be combined
+    output_folder : str
+        Folder where the intermediate files and the final combined gridded data
+        should be stored
+    source : str
+        DEM source
+
+    Returns
+    -------
+
+    """
+    # create a combined salem.Grid object, which serves as canvas/boundaries of
+    # the combined glacier region
+    combined_grid = utils.combine_grids(gdirs)
+
+    # check if output_folder exists
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    # retrieve and project a topography/DEM for the defined region
+    get_dem_for_grid(combined_grid, output_folder, source=source)
+    # processes dem(smoothing etc.) and creates gridded_data and adds DEM data
+    process_dem.unwrapped(gdir=None, grid=combined_grid, fpath=output_folder)
+
+
+    def _combine_variable_on_common_grid(var_name, source_file='gridded_data', time_dim=False, suffix=''):
+        combined_data = None
+        time_coord = None
+        for gdir in gdirs:
+            with xr.open_dataset(gdir.get_filepath(source_file, filesuffix=suffix)) as ds:
+                ds = ds.load()
+
+            # assuming that the same simulation ran the same time for each glacier
+            # => taking the simulation duration from the first gdir
+            if combined_data is None:
+                if time_dim:
+                    if time_coord is None:
+                        time_coord = ds.time
+                    else:
+                        if time_coord == ds.time:
+                            continue
+                        else:
+                            raise ValueError('The simulation times of the simulations that you try to combine are '
+                                             'different from each other.\n'
+                                             f'The Glacier with the rgi_id {gdir.rgi_id}\ has {len(ds.time)} timesteps,'
+                                             f'not matching with {gdirs[0].rgi_id}\'s {len(time_coord)} timesteps.')
+                    combined_data = np.zeros((len(time_coord), combined_grid.ny, combined_grid.nx))
+                else:
+                    combined_data = np.zeros((combined_grid.ny, combined_grid.nx))
+            r_data = combined_grid.map_gridded_data(ds[var_name],
+                                                    grid=gdir.grid)
+            combined_data += r_data.filled(0)
+        combined_data = np.where(combined_data == 0, np.NaN, combined_data)
+
+        return combined_data, time_coord
+
+    combined_distributed_thickness, time_coord = _combine_variable_on_common_grid('distributed_thickness',
+                                                                      source_file='gridded_simulation', time_dim=True,
+                                                                      suffix=suffix)
+    combined_glacier_mask, _ = _combine_variable_on_common_grid('glacier_mask')
+    # combined_topo_smoothed = _combine_variable_on_common_grid('topo_smoothed')
+    combined_bedrock, _ = _combine_variable_on_common_grid('bedrock', source_file='gridded_simulation', suffix=suffix)
+    combined_glacier_ext, _ = _combine_variable_on_common_grid('glacier_ext')
+
+
+    with utils.ncDataset(os.path.join(output_folder, 'gridded_data.nc'), 'a') as gridded_data:
+        gridded_data.createDimension('time', len(time_coord))
+        v = gridded_data.createVariable('time', 'f4', ('time',), zlib=True)
+        v.units = 'years'
+        v.long_name = 'time coordinate of the simulation'
+        v.standard_name = 'time'
+        v[:] = time_coord.values
+        # add combined distributed thickness
+
+        v = gridded_data.createVariable('combined_distributed_thickness', 'f4', ('time', 'y', 'x',), zlib=True)
+        v.units = 'm'
+        v.long_name = 'combined distributed thickness'
+        v[:] = combined_distributed_thickness
+
+        v = gridded_data.createVariable('combined_glacier_mask', 'f4', ('y', 'x',), zlib=True)
+        v.units = 'm'
+        v.long_name = 'combined glacier mask'
+        v[:] = combined_glacier_mask
+
+        v = gridded_data.createVariable('combined_bedrock', 'f4', ('y', 'x',), zlib=True)
+        v.units = 'm'
+        v.long_name = 'combined bedrock'
+        v[:] = combined_bedrock
+
+        v = gridded_data.createVariable('combined_glacier_ext', 'f4', ('y', 'x',), zlib=True)
+        v.units = 'm'
+        v.long_name = 'combined glacier extent'
+        v[:] = combined_glacier_ext
+
