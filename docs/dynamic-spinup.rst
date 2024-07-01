@@ -5,9 +5,9 @@ Dynamic spinup
 
 OGGM offers an option for reconstructing the recent past of a glacier by using
 a so called "dynamic spinup", during which the state of the glacier in the past
-is estimated by an iterative approach. MAny possible past (1979) states are
+is estimated by an iterative approach. Many possible past (1979) states are
 tested, and the first one which leads to a correct representation of today's
-glacier geometry after a forward run from 1979 to the RGI date.
+glacier geometry after a forward run from 1979 to the RGI date will be chosen.
 For the match criterion, you can choose if you want to match
 area OR volume at the RGI date.
 
