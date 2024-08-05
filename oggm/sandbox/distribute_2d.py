@@ -336,11 +336,6 @@ def distribute_thickness_from_simulation(gdir,
     # applying the thickness threshold
     dg = xr.where(dg['thickness_m'] < fl_thickness_threshold, 0, dg)
 
-    # applying the rolling mean smoothing
-    if rolling_mean_smoothing:
-        dg[['area_m2', 'volume_m3']] = dg[['area_m2', 'volume_m3']].rolling(
-            min_periods=1, time=rolling_mean_smoothing, center=True).mean()
-
     # applying the only retreating algorithm
     if only_allow_retreating:
         increasing = True
@@ -359,6 +354,11 @@ def distribute_thickness_from_simulation(gdir,
             if nr_of_diff_timesteps == 0:
                 # when no timestep requires further modification, the while loop can end.
                 increasing = False
+
+    # applying the rolling mean smoothing
+    if rolling_mean_smoothing:
+        dg[['area_m2', 'volume_m3']] = dg[['area_m2', 'volume_m3']].rolling(
+            min_periods=1, time=rolling_mean_smoothing, center=True).mean()
 
     # monthly interpolation for higher temporal resolution
     if add_monthly:
