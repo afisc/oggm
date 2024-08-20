@@ -3,20 +3,20 @@ import warnings
 
 import matplotlib.pyplot as plt
 import pytest
-salem = pytest.importorskip('salem')
-gpd = pytest.importorskip('geopandas')
 
 import oggm
 import xarray as xr
-import rioxarray as rioxr
 import numpy as np
 import pandas as pd
 from oggm import utils
 from oggm.utils import get_demo_file
 from oggm.shop import its_live, rgitopo, bedtopo, millan22, hugonnet_maps, glathida
-from oggm.core import gis, centerlines, massbalance
+from oggm.core import gis, centerlines
 from oggm import cfg, tasks, workflow
 
+salem = pytest.importorskip('salem')
+gpd = pytest.importorskip('geopandas')
+rioxr = pytest.importorskip('rioxarray')
 pytestmark = pytest.mark.test_env("utils")
 
 DO_PLOT = False
@@ -591,7 +591,7 @@ class Test_climate_datasets:
         dfp = pd.concat(dfp, axis=1, keys=exps)
 
         # Common period
-        dfy = dft.resample('YS').mean().dropna().iloc[1:]
+        dfy = dft.resample('AS').mean().dropna().iloc[1:]
         dfm = dft.groupby(dft.index.month).mean()
         assert dfy.corr().min().min() > 0.44  # ERA5L and CERA do no correlate
         assert dfm.corr().min().min() > 0.97
@@ -610,7 +610,7 @@ class Test_climate_datasets:
 
         # PRECIP
         # Common period
-        dfy = dfp.resample('YS').mean().dropna().iloc[1:] * 12
+        dfy = dfp.resample('AS').mean().dropna().iloc[1:] * 12
         dfm = dfp.groupby(dfp.index.month).mean()
         assert dfy.corr().min().min() > 0.5
         assert dfm.corr().min().min() > 0.8
