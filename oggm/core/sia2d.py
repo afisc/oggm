@@ -21,7 +21,7 @@ class Model2D(object):
 
     def __init__(self, bed_topo, init_ice_thick=None, dx=None, dy=None,
                  mb_model=None, y0=0., glen_a=None, mb_elev_feedback='annual',
-                 ice_thick_filter=filter_ice_border, mb_filter=None):
+                 ice_thick_filter=filter_ice_border, mb_filter=None, mb_filter_value=0):
         """Create a new 2D model from gridded data.
 
         Parameters
@@ -49,12 +49,18 @@ class Model2D(object):
         mb_filter : ndarray
             2d array indicating the mask where positive mb is allowed
             (useful to allow only specific glaciers to grow)
+        mb_filter_value : int
+            The value the mass balance outside of the glacier mask(given via "mb_filter") is set to.
+            The default value is 0, resulting in no accumulation of mass outside the glacier mask.
         """
+
+
 
         # Mass balance
         self.mb_elev_feedback = mb_elev_feedback
         self.mb_model = mb_model
         self.mb_filter = mb_filter
+        self.mb_filter_value = mb_filter_value
 
         # Defaults
         if glen_a is None:
@@ -150,7 +156,7 @@ class Model2D(object):
             _mb = self._mb_call(self.surface_h.flatten(), year=year)
             _mb = _mb.reshape((self.ny, self.nx))
             if self.mb_filter is not None:
-                _mb[~ self.mb_filter & (_mb > 0)] = 0
+                _mb[~ self.mb_filter & (_mb > 0)] = self.mb_filter_value
             return _mb
 
         date = utils.floatyear_to_date(year)
@@ -164,7 +170,7 @@ class Model2D(object):
             _mb = self._mb_call(self.surface_h.flatten(), year=year, fl_id=0)
             _mb = _mb.reshape((self.ny, self.nx))
             if self.mb_filter is not None:
-                _mb[~ self.mb_filter & (_mb > 0)] = 0
+                _mb[~ self.mb_filter & (_mb > 0)] = self.mb_filter_value
             self._mb_current_out = _mb
 
         return self._mb_current_out
@@ -274,6 +280,7 @@ class IGM_Model2D(Model2D):
             mb_elev_feedback="annual",
             ice_thick_filter=filter_ice_border,
             mb_filter=None,
+            mb_filter_value=0,
             x=None,
             y=None,
     ):
@@ -287,6 +294,7 @@ class IGM_Model2D(Model2D):
             mb_elev_feedback=mb_elev_feedback,
             ice_thick_filter=ice_thick_filter,
             mb_filter=mb_filter,
+            mb_filter_value=mb_filter_value
         )
 
         """
@@ -309,6 +317,9 @@ class IGM_Model2D(Model2D):
         ice_thick_filter : function to apply to the ice thickness *after* each time step. (function)
 
         mb_filter : the mask of the glacier (2d array)
+        
+        mb_filter_value : The value the mass balance outside of the glacier mask(given via "mb_filter") is set to.
+                          The default value is 0, resulting in no accumulation of mass outside the glacier mask.
 
         """
 
