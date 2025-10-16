@@ -101,7 +101,7 @@ def cook23_to_gdir(gdir, vars=['thk', 'divflux']):
             if vn in nc.variables:
                 v = nc.variables[vn]
             else:
-                v = nc.createVariable(vn, 'f4', ('y', 'x', ), zlib=True)
+                v = nc.createVariable(vn, 'f4', ('y', 'x', ), zlib=True, fill_value=np.nan)
 
             if var == 'thk':
                 v.units = 'm'
@@ -111,7 +111,7 @@ def cook23_to_gdir(gdir, vars=['thk', 'divflux']):
                 v.long_name = 'Divergence of ice flux from Cook et al. 2023'
 
             v.data_source = url
-            v[:] = data
+            v[:] = data.astype(np.float32)
 
 
 @utils.entity_task(log)
@@ -133,12 +133,13 @@ def cook23_statistics(gdir):
     try:
         with xr.open_dataset(gdir.get_filepath('gridded_data')) as ds:
             thick = ds['cook23_thk'].where(ds['glacier_mask'], np.nan).load()
+            gridded_area = ds['glacier_mask'].sum() * gdir.grid.dx ** 2 * 1e-6
             with warnings.catch_warnings():
                 # For operational runs we ignore the warnings
                 warnings.filterwarnings('ignore', category=RuntimeWarning)
                 d['cook23_vol_km3'] = float(thick.sum() * gdir.grid.dx ** 2 * 1e-9)
                 d['cook23_area_km2'] = float((~thick.isnull()).sum() * gdir.grid.dx ** 2 * 1e-6)
-                d['cook23_perc_cov'] = float(d['cook23_area_km2'] / gdir.rgi_area_km2)
+                d['cook23_perc_cov'] = float(d['cook23_area_km2'] / gridded_area)
 
     except (FileNotFoundError, AttributeError, KeyError):
         pass

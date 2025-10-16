@@ -21,11 +21,56 @@ Enhancements
   ``dis_from_border``, ...) to define this ranking, providing greater flexibility
   and control over how the melting sequence is visualized (:pull:`1746`).
   By `Patrick Schmitt <https://github.com/pat-schmitt>`_
+- Changed COPDEM data source (again) - this comes with good sides (:pull:`1773`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- Added BedMachine products to the shop (:pull:`1753`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- Updated itslive velocity products to v2 (:pull:`1753`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- Added "reset_state()" function to ``MassBalanceModel`` to signal any state-dependent
+  mass balance model to "reset its state" at the start of the period. This function
+  does nothing in the parent class and would only be implemented by a state-ful
+  mass balance model. There might be a use for this in the future, but for now
+  it's just a placeholder (:pull:`1757`).
+  By `Dan Goldberg <https://github.com/dngoldberg>`_ and
+  `Fabien Maussion <https://github.com/fmaussion>`_.
+- Refactored mass balance functions ``get_specific_mb`` and``get_ela``. These
+  are no longer recursive and have been optimised for performance.
+  By `Nicolas Gampierakis <https://github.com/gampnico>`_.
+- Added the ability to use an incomplete version of the full params.cfg file
+  to override some default parameter values. This can be done by providing the
+  file during initialization with ``cfg.initialize(file=mini_params_filepath)``
+  (:pull:`1776`).
+  By `Patrick Schmitt <https://github.com/pat-schmitt>`_
+- Added a `compile_fl_diagnostics` (:pull:`1753`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- New standard glacier directories now use a new reference lookup
+  table to decide on the topo data to use (:pull:`1781`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- Added the possibility to provide a custom grid  in
+  ``workflow.merge_gridded_data``. If no grid is provided, the default is to
+  merge all grids of the provided gdirs (:pull:`1779`).
+  By `Patrick Schmitt <https://github.com/pat-schmitt>`_
+- Flowlines shapefiles output now have more attributes and are easier to
+  use (:pull:`1786`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- Flowline diagnostic variables can now be saved with a monthly resolution.
+  With this the unit of some variables depends on the requested resolution.
+  To reflect this the correct unit is stored in the attributes of the variables
+  and the following variable names were changed: ``dhdt_myr`` -> ``dhdt``,
+  ``climatic_mb_myr`` -> ``climatic_mb`` and ``flux_divergence_myr`` ->
+  ``flux_divergence`` (:pull:`1792`).
+  By `Patrick Schmitt <https://github.com/pat-schmitt>`_
 
 Bug fixes
 ~~~~~~~~~
 
-
+- Fixed a bug where Millan velocities would be assigned 0
+  instead of NaN in grid points without velocity (:pull:`1753`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- `apparent_mb_from_any_mb` no longer computes mass-balance twice (:pull:`1757`).
+  By `Dan Goldberg <https://github.com/dngoldberg>`_ and
+  `Fabien Maussion <https://github.com/fmaussion>`_.
 
 v1.6.2 (August 25, 2024)
 ------------------------
@@ -102,6 +147,10 @@ Enhancements
   By `Fabien Maussion <https://github.com/fmaussion>`_
 - Added the rgi7g_to_complex task which adds a mask of glacier
   entities in the glacier complex glacier dirs (:pull:`1736`).
+  By `Fabien Maussion <https://github.com/fmaussion>`_
+- A new global task (`glathida.compile_glathida_on_grid`) is available to generate
+  big tables that can be used for e.g. ML workflows for ice thickness estimation
+  (:pull:`1782`).
   By `Fabien Maussion <https://github.com/fmaussion>`_
 
 Bug fixes

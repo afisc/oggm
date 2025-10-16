@@ -76,11 +76,11 @@ def parse_rgi_meta(version=None):
 
     # Parse RGI metadata
     if version in ['7', '70G', '70C']:
-        rgi7url = 'https://cluster.klima.uni-bremen.de/~fmaussion/misc/rgi7_data/00_rgi70_regions/'
-        reg_names = gpd.read_file(file_downloader(rgi7url + '00_rgi70_O1Regions/00_rgi70_O1Regions.dbf'))
+        rgi7url = 'https://cluster.klima.uni-bremen.de/~oggm/rgi/RGI2000-v7.0-regions.zip'
+        reg_names = gpd.read_file(rgi7url, layer='RGI2000-v7.0-o1regions')
         reg_names.index = reg_names['o1region'].astype(int)
         reg_names = reg_names['full_name']
-        subreg_names = gpd.read_file(file_downloader(rgi7url + '00_rgi70_O2Regions/00_rgi70_O2Regions.dbf'))
+        subreg_names = gpd.read_file(rgi7url, layer='RGI2000-v7.0-o2regions')
         subreg_names.index = subreg_names['o2region']
         subreg_names = subreg_names['full_name']
 
@@ -170,6 +170,31 @@ def tolist(arg, length=None):
                              'to desired length: {}.'.format(length))
 
     return arg
+
+
+def set_array_type(array):
+    """Convert array to scalar if it contains a single value.
+
+    Converting arrays with ndim > 0 to scalar is deprecated in numpy
+    1.25+. Some OGGM functions expect arrays with a single value to be returned as scalars.
+
+    Parameters
+    ----------
+    array : ArrayLike
+        A numpy array or list.
+
+    Returns
+    -------
+    float or np.ndarray
+        Scalar if the array contains a single value, otherwise a numpy
+        array.
+    """
+    if len(array) > 1:
+        output = np.asanyarray(array)
+    else:
+        output = array[0]
+
+    return output
 
 
 def haversine(lon1, lat1, lon2, lat2):

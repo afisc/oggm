@@ -649,6 +649,108 @@ class TestMassBalanceModels:
         # assert_allclose(mb.get_ela(year=yrs[:30]),
         #                 mb_gw.get_ela(year=yrs[:30]))
 
+    @pytest.mark.parametrize("ref_year", [1979, 1980])
+    def test_get_annual_specific_mass_balance(self, hef_gdir, ref_year):
+
+        gdir = hef_gdir
+        init_present_time_glacier(gdir)
+
+        test_fls = gdir.read_pickle("model_flowlines")
+        assert len(test_fls) > 1
+        mb_mod = massbalance.MultipleFlowlineMassBalance(
+            gdir, fls=test_fls, mb_model_class=massbalance.MonthlyTIModel
+        )
+        test_mbs = mb_mod.get_annual_specific_mass_balance(
+            fls=test_fls, year=ref_year
+        )
+        assert isinstance(test_mbs, np.float64)
+
+        # Compare to old function
+        flowline_models = mb_mod.flowline_mb_models
+        fls = gdir.read_pickle("model_flowlines")
+        year = ref_year
+        mbs = []
+        widths = []
+        for i, (fl, mb_mod) in enumerate(zip(fls, flowline_models)):
+            _widths = fl.widths
+            try:
+                # For rect and parabola don't compute spec mb
+                _widths = np.where(fl.thick > 0, _widths, 0)
+            except AttributeError:
+                pass
+            assert isinstance(_widths, np.ndarray)
+            widths = np.append(widths, _widths)
+            mb = mb_mod.get_annual_mb(fl.surface_h, year=year, fls=fls, fl_id=i)
+            mbs = np.append(mbs, mb * SEC_IN_YEAR * mb_mod.rho)
+        assert widths.shape == mbs.shape
+        ref_mbs = utils.weighted_average_1d(mbs, widths)
+
+        assert test_mbs == ref_mbs
+
+    def test_get_specific_mb(self, hef_gdir):
+
+        gdir = hef_gdir
+        init_present_time_glacier(gdir)
+        ys = 1979
+        ye = 2019
+        years = np.arange(ys, ye + 1)
+
+        fls = gdir.read_pickle("inversion_flowlines")
+        mb_mod = massbalance.MultipleFlowlineMassBalance(
+            gdir,
+            fls=fls,
+            mb_model_class=massbalance.MonthlyTIModel,
+            repeat=True,
+            ys=ys,
+            ye=ye,
+        )
+        smb = mb_mod.get_specific_mb(year=years)
+        assert isinstance(smb, np.ndarray)
+        assert smb.shape == (1 + (ye - ys),)
+
+        # Rough non-weighted bounds
+        ref_smb_lo = (
+            mb_mod.get_annual_mb(fls[-1].surface_h, year=ys, fls=fls, fl_id=-1)
+            * cfg.SEC_IN_YEAR
+            * cfg.PARAMS["ice_density"]
+        )
+        ref_smb_hi = (
+            mb_mod.get_annual_mb(fls[0].surface_h, year=ys, fls=fls, fl_id=0)
+            * cfg.SEC_IN_YEAR
+            * cfg.PARAMS["ice_density"]
+        )
+
+        smb_single = mb_mod.get_specific_mb(year=ys)
+        assert isinstance(smb_single, float)
+        assert smb_single == smb[0]
+        assert ref_smb_lo.mean() < smb_single < ref_smb_hi.mean()
+
+    def test_get_ela(self, hef_gdir):
+
+        gdir = hef_gdir
+        init_present_time_glacier(gdir)
+        ys = 1979
+        ye = 2019
+        years = np.arange(ys, ye + 1)
+
+        fls = gdir.read_pickle("inversion_flowlines")
+        mb_mod = massbalance.MultipleFlowlineMassBalance(
+            gdir,
+            fls=fls,
+            mb_model_class=massbalance.MonthlyTIModel,
+            repeat=True,
+            ys=ys,
+            ye=ye,
+        )
+        ela = mb_mod.get_ela(year=years)
+        assert isinstance(ela, np.ndarray)
+        assert ela.shape == (1 + (ye - ys),)
+
+        ela_single = mb_mod.get_ela(year=ys)
+        assert isinstance(ela_single, float)
+        assert ela_single == ela[0]
+        assert fls[-1].surface_h.min() < ela_single < fls[0].surface_h.max()
+
     def test_constant_mb_model(self, hef_gdir):
 
         rho = cfg.PARAMS['ice_density']
@@ -792,6 +894,7 @@ class TestMassBalanceModels:
         mbts = yrs * 0.
         for i, yr in enumerate(yrs):
             mbts[i] = mb_mod.get_specific_mb(h, w, year=yr)
+            assert isinstance(mbts[i], float)
             r_mbh += mb_mod.get_annual_mb(h, yr) * SEC_IN_YEAR
         r_mbh /= ny
         np.testing.assert_allclose(ref_mbh, r_mbh, atol=0.2)
@@ -1687,41 +1790,44 @@ class TestIO():
         a_diag = []
         l_diag = []
         ela_diag = []
-        for yr in years:
+        for i, yr in enumerate(years):
             model.run_until(yr)
+
             vol_diag.append(model.volume_m3)
             a_diag.append(model.area_m2)
             l_diag.append(model.length_m)
             ela_diag.append(model.mb_model.get_ela(year=yr))
-            if int(yr) == yr:
-                vol_ref.append(model.volume_m3)
-                a_ref.append(model.area_m2)
-                l_ref.append(model.length_m)
-                if yr > 0:
-                    dhdt_ref.append(model.fls[0].thick -
-                                    h_previous_timestep)
-                    h_previous_timestep = model.fls[0].thick
-                    # for mb use previous surface height and previous year, only
-                    # save climatic mb where dhdt is non zero
-                    climatic_mb_ref.append(
-                        np.where(np.isclose(dhdt_ref[-1], 0.),
-                                 0.,
-                                 model.get_mb(surface_h_previous_timestep,
-                                              model.yr - 1,
-                                              fl_id=0) *
-                                 SEC_IN_YEAR)  # converted to m yr-1
-                    )
-                    surface_h_previous_timestep = model.fls[0].surface_h
-                    # smooth flux divergence where glacier is getting ice free
-                    has_become_ice_free = np.logical_and(
-                        np.isclose(model.fls[0].thick, 0.),
-                        dhdt_ref[-1] < 0.)
-                    flux_divergence_ref.append(
-                        (dhdt_ref[-1] - climatic_mb_ref[-1]) *
-                        np.where(has_become_ice_free, 0.1, 1.))
-                if int(yr) == 500:
-                    secfortest = model.fls[0].section
-                    hfortest = model.fls[0].thick
+
+            vol_ref.append(model.volume_m3)
+            a_ref.append(model.area_m2)
+            l_ref.append(model.length_m)
+
+            if yr > 0:
+                dhdt_ref.append(model.fls[0].thick -
+                                h_previous_timestep)
+                h_previous_timestep = model.fls[0].thick
+                # for mb use previous surface height and previous year, only
+                # save climatic mb where dhdt is non zero
+                climatic_mb_ref.append(
+                    np.where(np.isclose(dhdt_ref[-1], 0.),
+                             0.,
+                             model.get_mb(surface_h_previous_timestep,
+                                          years[i-1],
+                                          fl_id=0) *
+                             SEC_IN_MONTH)  # converted to m yr-1
+                )
+                surface_h_previous_timestep = model.fls[0].surface_h
+
+                # smooth flux divergence where glacier is getting ice free
+                has_become_ice_free = np.logical_and(
+                    np.isclose(model.fls[0].thick, 0.),
+                    dhdt_ref[-1] < 0.)
+                flux_divergence_ref.append(
+                    (dhdt_ref[-1] - climatic_mb_ref[-1]) *
+                    np.where(has_become_ice_free, 0.1, 1.))
+            if int(yr) == 500:
+                secfortest = model.fls[0].section
+                hfortest = model.fls[0].thick
 
         np.testing.assert_allclose(ds.ts_section.isel(time=-1),
                                    secfortest)
@@ -1742,11 +1848,11 @@ class TestIO():
                                    a_ref)
 
         np.testing.assert_allclose(dhdt_ref,
-                                   ds_fl.dhdt_myr[1:])  # first step is nan
+                                   ds_fl.dhdt[1:])  # first step is nan
         np.testing.assert_allclose(climatic_mb_ref,
-                                   ds_fl.climatic_mb_myr[1:])
+                                   ds_fl.climatic_mb[1:])
         np.testing.assert_allclose(flux_divergence_ref,
-                                   ds_fl.flux_divergence_myr[1:])
+                                   ds_fl.flux_divergence[1:])
 
         vel = ds_fl.ice_velocity_myr.isel(time=-1)
         assert 20 < vel.max() < 40
@@ -2610,6 +2716,7 @@ class TestHEFNonPolluted:
             assert 'volume_bsl_m3' not in ds_fl
 
         past_run_file = os.path.join(cfg.PATHS['working_dir'], 'compiled.nc')
+        diag_dir = os.path.join(cfg.PATHS['working_dir'], 'compiled_diags')
         mb_file = os.path.join(cfg.PATHS['working_dir'], 'fixed_mb.csv')
         stats_file = os.path.join(cfg.PATHS['working_dir'], 'stats.csv')
         out_path = os.path.join(cfg.PATHS['working_dir'], 'extended.nc')
@@ -2623,6 +2730,8 @@ class TestHEFNonPolluted:
         utils.compile_fixed_geometry_mass_balance([gdir], path=mb_file)
         utils.compile_run_output([gdir], path=past_run_file,
                                  input_filesuffix='_hist')
+        utils.compile_fl_diagnostics([gdir], path=diag_dir,
+                                     input_filesuffix='_hist')
 
         # Extend
         utils.extend_past_climate_run(past_run_file=past_run_file,
@@ -2630,8 +2739,11 @@ class TestHEFNonPolluted:
                                       glacier_statistics_file=stats_file,
                                       path=out_path)
 
+        diag_file = os.path.join(diag_dir, 'RGI50-11.00',
+                                 'RGI50-11.00897_fl_diagnostics_hist.nc')
         with xr.open_dataset(out_path) as ods, \
-                xr.open_dataset(past_run_file) as ds:
+                xr.open_dataset(past_run_file) as ds, \
+                    xr.open_dataset(diag_file, group='fl_0') as dds:
 
             ref = ds.volume
             new = ods.volume
@@ -2667,6 +2779,11 @@ class TestHEFNonPolluted:
                                            ods[vn].sel(time=1990) -
                                            ods[vn].sel(time=1980),
                                            rtol=rtol)
+
+            # The test cant be too quantitative because of multiple flowlines
+            # Here we are testing only fl_0
+            ratio = ds.isel(rgi_id=0)['volume']/dds.volume_m3.sum(dim='dis_along_flowline')
+            np.testing.assert_allclose(ratio, 15, atol=3)
 
 
 @pytest.mark.usefixtures('with_class_wd')
@@ -3066,7 +3183,7 @@ class TestHEF:
         # Climate data
         fh = gdir.get_filepath('climate_historical')
         fcesm = gdir.get_filepath('gcm_data')
-        with xr.open_dataset(fh) as hist, xr.open_dataset(fcesm) as cesm:
+        with xr.open_dataset(fh) as hist, xr.open_dataset(fcesm, use_cftime=True) as cesm:
             # Let's do some basic checks
             shist = hist.sel(time=slice('1961', '1990'))
             scesm = cesm.sel(time=slice('1961', '1990'))

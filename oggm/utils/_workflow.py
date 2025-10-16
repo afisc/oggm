@@ -697,26 +697,28 @@ def get_centerline_lonlat(gdir,
         if keep_main_only and mm == 0:
             continue
         if corrected_widths_output:
-            le_segment = np.rint(np.max(cl.dis_on_line) * gdir.grid.dx)
-            for wi, cur, (n1, n2), wi_m in zip(cl.widths, cl.line.coords,
-                                               cl.normals, cl.widths_m):
+            dis_on_line = cl.dis_on_line * gdir.grid.dx
+            for wi, cur, (n1, n2), wi_m, d in zip(cl.widths, cl.line.coords,
+                                                  cl.normals, cl.widths_m,
+                                                  dis_on_line):
                 _l = shpg.LineString([shpg.Point(cur + wi / 2. * n1),
                                       shpg.Point(cur + wi / 2. * n2)])
                 gs = dict()
                 gs['RGIID'] = gdir.rgi_id
                 gs['SEGMENT_ID'] = j
-                gs['LE_SEGMENT'] = le_segment
+                gs['DISONLINE'] = d
                 gs['MAIN'] = mm
                 gs['WIDTH_m'] = wi_m
                 gs['geometry'] = shp_trafo(tra_func, _l)
                 olist.append(gs)
         elif geometrical_widths_output:
-            le_segment = np.rint(np.max(cl.dis_on_line) * gdir.grid.dx)
-            for _l, wi_m in zip(cl.geometrical_widths, cl.widths_m):
+            dis_on_line = cl.dis_on_line * gdir.grid.dx
+            for _l, d in zip(cl.geometrical_widths, dis_on_line):
+                wi_m = _l.length * gdir.grid.dx
                 gs = dict()
                 gs['RGIID'] = gdir.rgi_id
                 gs['SEGMENT_ID'] = j
-                gs['LE_SEGMENT'] = le_segment
+                gs['DISONLINE'] = d
                 gs['MAIN'] = mm
                 gs['WIDTH_m'] = wi_m
                 gs['geometry'] = shp_trafo(tra_func, _l)
@@ -868,7 +870,7 @@ def write_centerlines_to_shape(gdirs, *, path=True, to_tar=False,
         A good first value to test is 3.
     simplify_line_after : float
         apply shapely's `simplify` method to the line *after* corner cutting.
-        This is to reduce the size of the geometeries after they have been
+        This is to reduce the size of the geometries after they have been
         smoothed. The default value of 0 is fine if you use corner cutting less
         than 4. Otherwize try a small number, like 0.05 or 0.1.
     """
@@ -1811,6 +1813,86 @@ def compile_glacier_statistics(gdirs, filesuffix='', path=True,
 
 
 @entity_task(log)
+def _write_fl_diagnostics(gdir, input_filesuffix='', folder_map=None):
+    """Copy the flowline diagnostics file to the folder in folder_map.
+    """
+    try:
+        src_fp = gdir.get_filepath('fl_diagnostics', filesuffix=input_filesuffix)
+        dst_folder = folder_map[gdir.rgi_id]
+        original_name = os.path.basename(src_fp)
+        dst_filename = f"{gdir.rgi_id}_{original_name}"
+        dst_fp = os.path.join(dst_folder, dst_filename)
+        shutil.copy(src_fp, dst_fp)
+    except:
+        pass
+
+
+@global_task(log)
+def compile_fl_diagnostics(gdirs, *,
+                           path=True,
+                           group_size=1000,
+                           input_filesuffix='',
+                           compress=True,
+                           delete_folders=False):
+    """Write the flowline diagnostics to batches of tar files.
+
+    This is mostly useful for people not using OGGM.
+
+    Parameters
+    ----------
+    gdirs:
+        the list of GlacierDir to process.
+    path: str or bool
+        Set to "True" in order to store the files in the working directory
+        Set to a str path to store the files to your chosen location
+        Must be a path to a dir
+    group_size : int
+        The number of glaciers per tarfile
+    input_filesuffix : str
+        the input filesuffix to use for the fl_diagnostics files
+        (e.g. '_historical')
+    compress : bool
+        also compress the files in a tar file
+    delete_folders : bool
+        also deletes the tared folders
+    """
+    from oggm.workflow import execute_entity_task
+
+    if path is True:
+        path = os.path.join(cfg.PATHS['working_dir'],
+                            'fl_diagnostics' + input_filesuffix)
+
+    # Assign each glacier to a batch folder based on its index
+    mkdir(path)
+    folder_map = {}
+    for idx, gdir in enumerate(gdirs):
+        batch_idx = (idx // group_size) * group_size
+        batch_name = f"RGI{gdir.rgi_version}-{gdir.rgi_region}."
+        batch_name += f'{batch_idx:05d}'[:2]
+        batch_dir = os.path.join(path, batch_name)
+        mkdir(batch_dir)
+        folder_map[gdir.rgi_id] = batch_dir
+
+    log.workflow('compile_fl_diagnostics to {} ...'.format(path))
+
+    execute_entity_task(_write_fl_diagnostics, gdirs,
+                        input_filesuffix=input_filesuffix,
+                        folder_map=folder_map)
+
+    if compress:
+        # Get unique batch folders
+        batch_folders = set(folder_map.values())
+        for batch_folder in sorted(batch_folders):
+            batch_name = os.path.basename(batch_folder)
+            tar_path = os.path.join(path, f"{batch_name}.tar.gz")
+            with tarfile.open(tar_path, "w:gz") as tar:
+                tar.add(batch_folder, arcname=batch_name)
+
+            if delete_folders:
+                shutil.rmtree(batch_folder)
+
+
+@entity_task(log)
 def read_glacier_hypsometry(gdir):
     """Utility function to read the glacier hypsometry in the folder.
 
@@ -2707,7 +2789,8 @@ class GlacierDirectory(object):
         if is_glacier_complex:
             rgi_entity['glac_name'] = ''
             rgi_entity['src_date'] = '2000-01-01 00:00:00'
-            rgi_entity['dem_source'] = None
+            if 'dem_source' not in rgi_entity:
+                rgi_entity['dem_source'] = None
             rgi_entity['term_type'] = 9
 
         if is_rgi7:
@@ -2763,7 +2846,9 @@ class GlacierDirectory(object):
                 raise RuntimeError('RGI Version not supported: '
                                    '{}'.format(self.rgi_version))
             self.rgi_version = rgi_version
-            self.rgi_dem_source = None
+
+            # Mechanism to pass DEM source via the RGI entity
+            self.rgi_dem_source = rgi_entity.get('dem_source', None)
 
             # Read glacier attrs
             gtkeys = {'0': 'Glacier',
