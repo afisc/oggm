@@ -356,9 +356,9 @@ class IGM_Model2D(Model2D):
 
         # define
         self.state.arrhenius = (
-                self.tf.ones_like(self.state.thk) * cfg.PARAMS["glen_a"] * 10 * SEC_IN_YEAR * 1e18
+                self.tf.ones_like(self.state.thk) * cfg.PARAMS["glen_a"]   * SEC_IN_YEAR * 1e18
         )
-        self.state.slidingco = self.tf.ones_like(self.state.thk) * 0.015
+        self.state.slidingco = self.tf.ones_like(self.state.thk) * 0.045
         self.state.dX = self.tf.ones_like(self.state.thk) * self.dx
 
         self.state.x = self.tf.constant(self.x)
