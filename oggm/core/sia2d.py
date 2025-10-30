@@ -252,15 +252,17 @@ class Model2D(object):
 
 class IGM_Model2D(Model2D):
     """
-        This class overrides the oggm.core.sia2d.Model2D class to use the ice flow model
-        implemented in the IGM package. The ice flow model is called at each time step
-        to compute the ice velocity and the ice thickness evolution.
-        The ice flow model is called through the python wrapper of the IGM package.
+           This class overrides the oggm.core.sia2d.Model2D class to use the ice flow model
+           implemented in the IGM package. The ice flow model is called at each time step
+           to compute the ice velocity and the ice thickness evolution.
+           The ice flow model is called through the python wrapper of the IGM package.
 
         Code written by: Julien Jehl, Fabien Maussion, and Guillaume Jouvet
     """
     import igm
+    from igm.common import State, EmptyClass, load_yaml_as_cfg
     import tensorflow as tf
+
     def filter_ice_border(ice_thick):
         """Sets the ice thickness at the border of the domain to zero."""
         ice_thick[0, :] = 0
@@ -317,27 +319,13 @@ class IGM_Model2D(Model2D):
         ice_thick_filter : function to apply to the ice thickness *after* each time step. (function)
 
         mb_filter : the mask of the glacier (2d array)
-        
-        mb_filter_value : The value the mass balance outside of the glacier mask(given via "mb_filter") is set to.
-                          The default value is 0, resulting in no accumulation of mass outside the glacier mask.
 
         """
 
-        # parser = argparse.ArgumentParser(description="IGM")
-        parser = self.igm.params_core()
+        self.state = self.State()
 
-        params, __ = parser.parse_known_args()  # args=[] add this for jupyter notebook
-
-        modules_dict = {"modules_preproc": [], "modules_process": ["iceflow"], "modules_postproc": []}
-
-        imported_modules = self.igm.load_modules(modules_dict)
-
-        for module in imported_modules:
-            module.params(parser)
-
-        self.params = parser.parse_args(args=[])
-
-        self.state = self.igm.State()
+        self.cfg = self.EmptyClass()
+        self.cfg.processes = IGM_Model2D.load_yaml_as_cfg(os.path.join("..", "..", "..", "conf","processes","iceflow.yaml"))
 
         # Parameter
         self.cfl = 0.25
@@ -347,28 +335,29 @@ class IGM_Model2D(Model2D):
         self.x = x
         self.y = y
 
-        self.params.retrain_iceflow_emulator_freq = 1
+        self.cfg.processes.iceflow.retrain_iceflow_emulator_freq = 0
 
+        tf = self.tf
         # intialize
-        self.state.thk = self.tf.Variable(self.ice_thick)
-        self.state.usurf = self.tf.Variable(self.surface_h)
-        self.state.smb = self.tf.Variable(self.tf.zeros_like(self.ice_thick))
+        self.state.thk = tf.Variable(self.ice_thick)
+        self.state.usurf = tf.Variable(self.surface_h)
+        self.state.smb = tf.Variable(tf.zeros_like(self.ice_thick))
 
         # define
         self.state.arrhenius = (
-                self.tf.ones_like(self.state.thk) * cfg.PARAMS["glen_a"]   * SEC_IN_YEAR * 1e18
+                tf.ones_like(self.state.thk) * cfg.PARAMS["glen_a"] * SEC_IN_YEAR * 1e18
         )
-        self.state.slidingco = self.tf.ones_like(self.state.thk) * 0.045
-        self.state.dX = self.tf.ones_like(self.state.thk) * self.dx
+        self.state.slidingco = tf.ones_like(self.state.thk) * 0.045
+        self.state.dX = tf.ones_like(self.state.thk) * self.dx
 
-        self.state.x = self.tf.constant(self.x)
-        self.state.y = self.tf.constant(self.y)
+        self.state.x = tf.constant(self.x)
+        self.state.y = tf.constant(self.y)
 
         self.state.it = -1
 
         self.icemask = mb_filter
 
-        self.igm.modules.process.iceflow.initialize(self.params, self.state)
+        self.igm.processes.iceflow.iceflow.initialize(self.cfg, self.state)
 
     def step(self, dt):
         # recast glacier variables into igm-like variables
@@ -377,11 +366,11 @@ class IGM_Model2D(Model2D):
         self.state.usurf.assign(self.surface_h)
 
         # compute ubar and vbar
-        self.igm.modules.process.iceflow.update(self.params, self.state)
+        self.igm.processes.iceflow.iceflow.update(self.cfg, self.state)
 
         # retrurn the divergence of the flux using upwind fluxes
         divflux = (
-                self.igm.modules.utils.compute_divflux(
+                self.igm.utils.gradient.compute_divflux.compute_divflux(
                     self.state.ubar,
                     self.state.vbar,
                     self.state.thk,
@@ -390,12 +379,12 @@ class IGM_Model2D(Model2D):
                 )
                 / SEC_IN_YEAR
         )
-
+        tf = self.tf
         # compute max speed for the CFL stability condition
         velomax = (
                 max(
-                    self.tf.math.reduce_max(self.tf.math.abs(self.state.ubar)),
-                    self.tf.math.reduce_max(self.tf.math.abs(self.state.vbar)),
+                    tf.math.reduce_max(tf.math.abs(self.state.ubar)),
+                    tf.math.reduce_max(tf.math.abs(self.state.vbar)),
                 ).numpy()
                 / SEC_IN_YEAR
         )
@@ -416,7 +405,7 @@ class IGM_Model2D(Model2D):
 
         # return the updated ice thickness with oggm-like variable
         self.state.thk.assign(
-            self.tf.maximum(self.state.thk + dt_use * (self.state.smb - divflux), 0)
+            tf.maximum(self.state.thk + dt_use * (self.state.smb - divflux), 0)
         )
 
         self.ice_thick = self.state.thk.numpy()
