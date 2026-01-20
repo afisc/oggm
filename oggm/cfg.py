@@ -286,6 +286,13 @@ _doc = ('A netcdf file containing enough information to reconstruct the '
         'in disk space).')
 BASENAMES['model_geometry'] = ('model_geometry.nc', _doc)
 
+_doc = ('A netcdf file containing the distributed geometry/ice_thickness of the glacier.')
+BASENAMES['ioggm_geometry'] = ('ioggm_geometry.nc', _doc)
+
+_doc = ('A netcdf file containing the diagnostics of a iOGGM run.')
+BASENAMES['ioggm_diagnostics'] = ('ioggm_diagnostics.nc', _doc)
+
+
 _doc = ('A netcdf file containing the model diagnostics (volume, '
         'mass balance, length...).')
 BASENAMES['model_diagnostics'] = ('model_diagnostics.nc', _doc)
