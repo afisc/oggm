@@ -3014,7 +3014,7 @@ def init_present_time_glacier(gdir, filesuffix='',
                               use_binned_thickness_data=False):
     """Merges data from preprocessing tasks. First task after inversion!
 
-    This updates the `mode_flowlines` file and creates a stand-alone numerical
+    This updates the `model_flowlines` file and creates a stand-alone numerical
     glacier ready to run.
 
     Parameters
