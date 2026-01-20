@@ -21,6 +21,7 @@ from oggm.utils import (SuperclassMeta, get_geodetic_mb_dataframe,
 from oggm.exceptions import (InvalidWorkflowError, InvalidParamsError,
                              MassBalanceCalibrationError)
 from oggm import entity_task
+from oggm.shop import cook23
 
 # Module logger
 log = logging.getLogger(__name__)
@@ -1436,6 +1437,144 @@ class MultipleFlowlineMassBalance(MassBalanceModel):
             stack.append(weighted_average_1d(elas, areas))
 
         return set_array_type(stack)
+
+
+class DistributedMassBalance(MassBalanceModel):
+    """Handle mass balance for a 2D distributed glacier geometry,
+    for example when working with iOGGM.
+
+    Convenience class doing not much more than wrapping one mass balance
+    model to use it with a distributed glacier geometry.
+
+    This is useful for real-case studies, where each flowline might have
+    different model parameters.
+    """
+
+    def __init__(self,
+                 gdir,
+                 mb_model_class=MonthlyTIModel,
+                 use_inversion=False,
+                 input_filesuffix='',
+                 **kwargs):
+        """Initialize.
+
+        Parameters
+        ----------
+        gdir : GlacierDirectory
+            the glacier directory
+
+
+
+        mb_model_class : MassBalanceModel class
+            the MassBalanceModel to use (default is MonthlyTIModel,
+            alternatives are e.g. ConstantMassBalance...)
+        use_inversion_flowlines: bool, optional
+            use 'inversion_flowlines' instead of 'model_flowlines'
+        kwargs : kwargs to pass to mb_model_class
+        """
+
+
+
+        # Initialise the mb models
+        self.mb_model = mb_model_class(gdir, input_filesuffix=input_filesuffix,
+                               **kwargs)
+
+
+        self.valid_bounds = self.mb_model.valid_bounds
+        self.hemisphere = gdir.hemisphere
+
+    @property
+    def temp_bias(self):
+        """Temperature bias to add to the original series."""
+        return self.mb_model.temp_bias
+
+    @temp_bias.setter
+    def temp_bias(self, value):
+        """Temperature bias to add to the original series."""
+        self.mb_model.temp_bias = value
+
+    @property
+    def prcp_fac(self):
+        """Precipitation factor to apply to the original series."""
+        return self.mb_model.prcp_fac
+
+    @prcp_fac.setter
+    def prcp_fac(self, value):
+        """Precipitation factor to apply to the original series."""
+        self.mb_model.prcp_fac = value
+
+    @property
+    def bias(self):
+        """Residual bias to apply to the original series."""
+        return self.mb_model.bias
+
+    @bias.setter
+    def bias(self, value):
+        """Residual bias to apply to the original series."""
+        self.mb_model.bias = value
+
+    def is_year_valid(self, year):
+        return self.mb_model.is_year_valid(year)
+
+    def get_monthly_mb(self, heights, year=None, nx=None, ny=None, **kwargs):
+
+        if nx is None or ny is None:
+            print("`nx` and `ny` are required parameters for "
+                  "the distributed massbalance!")
+
+        heights = heights.flatten()
+        monthly_mb_1d = self.mb_model.get_monthly_mb(heights,
+                                                year=year,
+                                                **kwargs)
+        return monthly_mb_1d.reshape(ny, nx) # return the distributed mass balance
+
+    def get_annual_mb(self, heights, year=None, nx=None, ny=None, **kwargs):
+
+        if nx is None or ny is None:
+            print("`nx` and `ny` are required parameters for "
+                  "the distributed massbalance!")
+
+        heights = heights.flatten()
+        annual_mb_1d = self.mb_model.get_annual_mb(heights,
+                                           year=year,
+                                           **kwargs)
+        return annual_mb_1d.reshape((ny, nx)) # return the distributed massbalance
+
+    # specific mb and ela haven't been touched!! (not usable!)
+
+    def get_annual_specific_mass_balance(self, fls: list, year: float) -> float:
+        """TODO: Implement this functionality for the DistributedMassBalance.
+        """
+        raise NotImplementedError("This method has not been implemented yet.")
+        mbs = []
+        widths = []
+        for i, (fl, mb_mod) in enumerate(zip(fls, self.flowline_mb_models)):
+            _widths = fl.widths
+            try:
+                # For rect and parabola don't compute spec mb
+                _widths = np.where(fl.thick > 0, _widths, 0)
+            except AttributeError:
+                pass
+            widths.append(_widths)
+            mb = mb_mod.get_annual_mb(fl.surface_h, year=year, fls=fls, fl_id=i)
+            mbs.append(mb * SEC_IN_YEAR * mb_mod.rho)
+        widths = np.concatenate(widths, axis=0)  # 2x faster than np.append
+        mbs = np.concatenate(mbs, axis=0)
+        mbs = weighted_average_1d(mbs, widths)
+
+        return mbs
+
+
+    #### FOLLOWING FUNCTIONS NOT IMPLEMENTED YET
+    def get_specific_mb(self, heights=None, widths=None, fls=None, year=None):
+        """TODO: Implement this functionality for the DistributedMassBalance.
+        """
+        raise NotImplementedError("This method has not been implemented yet.")
+
+    def get_ela(self, year=None, **kwargs):
+        """TODO: Implement this functionality for the DistributedMassBalance.
+        """
+        raise NotImplementedError("This method has not been implemented yet.")
 
 
 def calving_mb(gdir):
