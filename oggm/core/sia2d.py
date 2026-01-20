@@ -249,7 +249,7 @@ class Model2D(object):
                                           dims=['y', 'x'])
 
         # write output?
-        if run_path is not None:
+        if run_path:
             if os.path.exists(run_path):
                 os.remove(run_path)
             run_ds.to_netcdf(run_path)
@@ -292,6 +292,8 @@ class IGM_Model2D(Model2D):
             mb_filter_value=0,
             x=None,
             y=None,
+            glen_a=None,
+            slidingco=None
     ):
         super(IGM_Model2D, self).__init__(
             bed_topo,
@@ -351,10 +353,14 @@ class IGM_Model2D(Model2D):
         self.state.smb = tf.Variable(tf.zeros_like(self.ice_thick))
 
         # define
+        if glen_a is None:
+            glen_a = cfg.PARAMS["glen_a"]
         self.state.arrhenius = (
-                tf.ones_like(self.state.thk) * cfg.PARAMS["glen_a"] * SEC_IN_YEAR * 1e18
+                tf.ones_like(self.state.thk) * glen_a * SEC_IN_YEAR * 1e18
         )
-        self.state.slidingco = tf.ones_like(self.state.thk) * 0.045
+        if slidingco is None:
+            slidingco = 0.045
+        self.state.slidingco = tf.ones_like(self.state.thk) * slidingco
         self.state.dX = tf.ones_like(self.state.thk) * self.dx
 
         self.state.x = tf.constant(self.x)
