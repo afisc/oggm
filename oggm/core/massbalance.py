@@ -731,6 +731,7 @@ class ConstantMassBalance(MassBalanceModel):
 
     def __init__(self, gdir, mb_model_class=MonthlyTIModel,
                  y0=None, halfsize=15,
+                 use_distributed_data=False,
                  **kwargs):
         """Initialize
 
@@ -757,6 +758,9 @@ class ConstantMassBalance(MassBalanceModel):
 
         # This is a quick'n dirty optimisation
         try:
+            # workaround for the 2D spinup
+            if use_distributed_data:
+                raise FileNotFoundError('use distributed data for distributed massbalance.')
             fls = gdir.read_pickle('model_flowlines')
             h = []
             for fl in fls:
