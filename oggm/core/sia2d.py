@@ -5,6 +5,7 @@ import os
 
 from oggm import cfg, utils
 from oggm.cfg import G, SEC_IN_YEAR, SEC_IN_DAY
+from oggm.core.massbalance import DistributedMassBalance
 
 
 def filter_ice_border(ice_thick):
@@ -153,8 +154,11 @@ class Model2D(object):
 
         # Do we have to optimise?
         if self.mb_elev_feedback == 'always':
-            _mb = self._mb_call(self.surface_h.flatten(), year=year)
-            _mb = _mb.reshape((self.ny, self.nx))
+            if isinstance(self.mb_model, DistributedMassBalance):
+                _mb = self._mb_call(self.surface_h, nx=self.nx, ny=self.ny, year=year)
+            else:
+                _mb = self._mb_call(self.surface_h.flatten(), fl_id=0, year=year)
+                _mb = _mb.reshape((self.ny, self.nx))
             if self.mb_filter is not None:
                 _mb[~ self.mb_filter & (_mb > 0)] = self.mb_filter_value
             return _mb
@@ -167,8 +171,11 @@ class Model2D(object):
         if self._mb_current_date != date or (self._mb_current_out is None):
             # We need to reset all
             self._mb_current_date = date
-            _mb = self._mb_call(self.surface_h.flatten(), year=year, fl_id=0)
-            _mb = _mb.reshape((self.ny, self.nx))
+            if isinstance(self.mb_model, DistributedMassBalance):
+                _mb = self._mb_call(self.surface_h, nx=self.nx, ny=self.ny, year=year)
+            else:
+                _mb = self._mb_call(self.surface_h.flatten(), fl_id=0, year=year)
+                _mb = _mb.reshape((self.ny, self.nx))
             if self.mb_filter is not None:
                 _mb[~ self.mb_filter & (_mb > 0)] = self.mb_filter_value
             self._mb_current_out = _mb
