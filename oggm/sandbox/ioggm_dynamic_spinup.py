@@ -36,13 +36,16 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                        minimise_for='area', precision_percent=1,
                        precision_absolute=1, min_ice_thickness=None,
                        first_guess_t_spinup=-2, t_spinup_max_step_length=2,
-                       maxiter=30, output_filesuffix='_dynamic_spinup',
-                       store_model_geometry=True, store_diagnostics=None,
+                       maxiter=30, output_filesuffix='_dynamic_ioggm_spinup',
+                       store_model_geometry=True, store_model_geometry_spinup=False,
+                       store_diagnostics=None, store_diagnostics_spinup=False,
                        store_model_evolution=True, ignore_errors=False,
                        return_t_spinup_best=False, ye=None,
                        model_flowline_filesuffix='',
                        add_fixed_geometry_spinup=False, allow_calving=False,
-                       store_monthly_step=None, **kwargs):
+                       store_monthly_step=None,
+                       store_all_spinup_steps=False,
+                             **kwargs):
     """
     TODO: adapt docstring to ioggm_spinup
     Dynamically spinup the glacier to match area or volume at the RGI date.
@@ -63,9 +66,9 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         init_model_yr : int or None
             the year of the initial run you want to start from. The default
             is to take the last year of the simulation.
-        init_model_fls : []
-            list of flowlines to use to initialise the model (the default is the
-            present_time_glacier file from the glacier directory).
+        init_model_geom : xarray.DataArray
+            2D xarray data to initialise the model (the default is the
+            cook_23 dataset).
             Ignored if `init_model_filesuffix` is set
         climate_input_filesuffix : str
             filesuffix for the input climate file
@@ -156,8 +159,8 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         store_model_geometry : bool
             whether to store the full model geometry run file to disk or not.
             Default is True
-        store_fl_diagnostics : bool or None
-            whether to store the model flowline diagnostics to disk or not.
+        store_all_spinup_steps : bool or None
+            whether to store the diagnostics of every spinup iteration or not.
             Default is None
         store_model_evolution : bool
             if True the complete dynamic spinup run is saved (complete evolution
@@ -304,6 +307,13 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
     else:
         geom_path = False
 
+    if store_model_geometry_spinup:
+        geom_path_spinup = gdir.get_filepath('ioggm_geometry',
+                                             filesuffix=output_filesuffix+'_spinup',
+                                             delete=True)
+    else:
+        geom_path_spinup = False
+
     if store_diagnostics is None:
         store_diagnostics = cfg.PARAMS['store_fl_diagnostics']
 
@@ -313,6 +323,13 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                                          delete=True)
     else:
         ioggm_diag_path = False
+
+    if store_diagnostics_spinup:
+        ioggm_diag_path_spinup = gdir.get_filepath('ioggm_diagnostics',
+                                                   filesuffix=output_filesuffix + '_spinup',
+                                                   delete=True)
+    else:
+        ioggm_diag_path_spinup = False
 
     diag_path = gdir.get_filepath('model_diagnostics',
                                   filesuffix=output_filesuffix,
@@ -357,11 +374,12 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
             warnings.filterwarnings('ignore', category=RuntimeWarning)
             model_dynamic_spinup_end.run_until_and_store(
                 yr_run,
-                # geom_path=geom_path,
+                geom_path=geom_path,
                 # diag_path=diag_path,
                 # fl_diag_path=fl_diag_path,
+                grid=gdir.grid,
                 # store_monthly_step=store_monthly_step,
-                run_path=ioggm_diag_path,
+                diag_path=ioggm_diag_path,
             )
 
         return model_dynamic_spinup_end
@@ -441,9 +459,28 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                                                    init_ice_thick=model_geom_spinup.fillna(0).values,
                                                    dx=gdir.grid.dx, dy=gdir.grid.dy, x=bed_con.x, y=bed_con.y,
                                                    mb_model=mb_model_spinup,
-                                                   y0=0, mb_filter=gd.glacier_mask.values == 1)
-        model_spinup.run_until(2 * halfsize_spinup)
+                                                   y0=yr_spinup-(2*halfsize_spinup)+1, mb_filter=gd.glacier_mask.values == 1)
+        # model_spinup.run_until(2 * halfsize_spinup)
+        ds_spinup = model_spinup.run_until_and_store(yr_spinup+1,
+                                         geom_path=geom_path_spinup,
+                                         grid=gdir.grid,
+                                         diag_path=ioggm_diag_path_spinup,
+                                         )
+        # save all the spinup steps before the historical run starts(default: 1980)
+        if store_all_spinup_steps:
+            spinup_step_ds = xr.Dataset(
+                coords={'time': ds_spinup.time},
+            )
+            # calculate timeserieses of volume and area
+            area_km2 = (ds_spinup.ice_thickness > 2).sum(dim=['x', 'y']) * (gdir.grid.dx ** 2) * 1e-6
+            volume_km3 = ds_spinup.ice_thickness.sum(dim=['x', 'y']) * (gdir.grid.dx ** 2) * 1e-9
 
+            spinup_step_ds['area_km2'] = area_km2
+            spinup_step_ds['volume_km3'] = volume_km3
+            step_path_spinup = ioggm_diag_path_spinup[:-3] + f'_it{forward_model_runs[-1]}.nc'
+            if os.path.exists(step_path_spinup):
+                os.remove(step_path_spinup)
+            spinup_step_ds.to_netcdf(step_path_spinup)
         # if glacier is completely gone return information in ice-free
         ice_free = False
         if np.isclose(model_spinup.volume_km3, 0.):
@@ -466,11 +503,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
 
             ds = model_historical.run_until_and_store(
                 ye, # if not set differently manually, usually equals target_yr
-                # geom_path=geom_path,
-                # diag_path=diag_path,
-                # fl_diag_path=fl_diag_path,
-                run_path=ioggm_diag_path,
-                step=1,
+                geom_path=geom_path,
+                grid=gdir.grid,
+                diag_path=ioggm_diag_path,
+                step=1, # save the yearly timestamp (function's default is: 2)
                 # dynamic_spinup_min_ice_thick=min_ice_thickness, # TBI
                 # fixed_geometry_spinup_yr=fixed_geometry_spinup_yr, # TBI
                 # store_monthly_step=store_monthly_step, # TBI
@@ -480,7 +516,21 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
             # included before (inplace)
             if delete_area_min_h:
                 ovars.remove('area_min_h')
+            # Store the last model run, even if it is not the final one. To see the algorithms evolution.
+            if store_all_spinup_steps:
+                step_ds = xr.Dataset(
+                    coords={'time': ds.time},
+                )
+                # calculate timeserieses of volume and area
+                area_km2 = (ds.ice_thickness > 2).sum(dim=['x', 'y']) * (gdir.grid.dx ** 2) * 1e-6
+                volume_km3 = ds.ice_thickness.sum(dim=['x', 'y']) * (gdir.grid.dx ** 2) * 1e-9
 
+                step_ds['area_km2'] = area_km2
+                step_ds['volume_km3'] = volume_km3
+                step_path = ioggm_diag_path[:-3] +  f'_it{forward_model_runs[-1]}.nc'
+                if os.path.exists(step_path):
+                    os.remove(step_path)
+                step_ds.to_netcdf(step_path)
             if type(ds) == tuple:
                 ds = ds[0]
             model_area_km2 = (ds.ice_thickness.loc[target_yr] > 1).sum(dim=['x', 'y']) * gridpoint_area * 1e-6
