@@ -8,7 +8,7 @@ import warnings
 # External libs
 import numpy as np
 from scipy import interpolate
-
+import xarray as xr
 # Locals
 import oggm.cfg as cfg
 from oggm import utils
@@ -41,6 +41,7 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
                        maxiter=30, output_filesuffix='_dynamic_spinup',
                        store_model_geometry=True, store_fl_diagnostics=None,
                        store_model_evolution=True, ignore_errors=False,
+                       store_all_spinup_steps=False,
                        return_t_spinup_best=False, ye=None,
                        model_flowline_filesuffix='',
                        add_fixed_geometry_spinup=False, allow_calving=False,
@@ -455,6 +456,18 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
 
             if type(ds) == tuple:
                 ds = ds[0]
+            if store_all_spinup_steps:
+                step_ds = xr.Dataset(
+                    coords={'time': ds.time},
+                )
+                step_ds['area_km2'] = ds.area_m2_min_h * 1e-6
+                step_ds['volume_km3'] = ds.volume_m3 * 1e-9
+
+                step_path = diag_path[:-3] + f'_it{forward_model_runs[-1]}.nc'
+                if os.path.exists(step_path):
+                    os.remove(step_path)
+                step_ds.to_netcdf(step_path)
+
             model_area_km2 = ds.area_m2_min_h.loc[target_yr].values * 1e-6
             model_volume_km3 = ds.volume_m3.loc[target_yr].values * 1e-9
         else:
