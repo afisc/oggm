@@ -24,6 +24,7 @@ from oggm.core.massbalance import (MultipleFlowlineMassBalance,
                                    DistributedMassBalance,
                                    MonthlyTIModel,
                                    apparent_mb_from_any_mb)
+from oggm.core.dynamic_spinup import define_new_melt_f_in_gdir
 from oggm.core.sia2d import IGM_Model2D
 from oggm.shop import cook23
 # Module logger
@@ -1032,3 +1033,1238 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
             return model_dynamic_spinup_end[-1], final_t_spinup_guess[-1]
         else:
             return model_dynamic_spinup_end[-1]
+
+
+def dynamic_melt_f_run_with_dynamic_spinup(
+        gdir, melt_f, yr0_ref_mb, yr1_ref_mb, geom_init, ys, ye,
+        output_filesuffix='', evolution_model=None,
+        mb_model_historical=None, mb_model_spinup=None,
+        minimise_for='area', climate_input_filesuffix='', spinup_period=20,
+        min_spinup_period=10, target_yr=None, precision_percent=1,
+        precision_absolute=1, min_ice_thickness=None,
+        first_guess_t_spinup=-2, t_spinup_max_step_length=2, maxiter=30,
+        store_model_geometry=True, store_diagnostics=None,
+        local_variables=None, set_local_variables=False, do_inversion=True,
+        spinup_start_yr_max=None, add_fixed_geometry_spinup=False,
+        **kwargs):
+    """
+    This function is one option for a 'run_function' for the
+    'run_dynamic_melt_f_calibration' function (the corresponding
+    'fallback_function' is
+    'dynamic_melt_f_run_with_dynamic_spinup_fallback'). This
+    function defines a new melt_f in the glacier directory and conducts an
+    inversion calibrating A to match '_vol_m3_ref' with this new melt_f
+    ('calibrate_inversion_from_consensus'). Afterwards a dynamic spinup is
+    conducted to match 'minimise_for' (for more info look at docstring of
+    'run_dynamic_spinup'). And in the end the geodetic mass balance of the
+    current run is calculated (between the period [yr0_ref_mb, yr1_ref_mb]) and
+    returned.
+
+    Parameters
+    ----------
+    gdir : :py:class:`oggm.GlacierDirectory`
+        the glacier directory to process
+    melt_f : float
+        the melt_f used for this run
+    yr0_ref_mb : int
+        the start year of the geodetic mass balance
+    yr1_ref_mb : int
+        the end year of the geodetic mass balance
+    fls_init : []
+        List of flowlines to use to initialise the model
+    ys : int
+        start year of the complete run, must by smaller or equal y0_ref_mb
+    ye : int
+        end year of the complete run, must be smaller or equal y1_ref_mb
+    output_filesuffix : str
+        For the output file.
+        Default is ''
+    evolution_model : :class:oggm.core.FlowlineModel
+        which evolution model to use. Default: cfg.PARAMS['evolution_model']
+        Not all models work in all circumstances!
+    mb_model_historical : :py:class:`core.MassBalanceModel`
+        User-povided MassBalanceModel instance for the historical run. Default
+        is to use a MonthlyTIModel model  together with the provided
+        parameter climate_input_filesuffix.
+    mb_model_spinup : :py:class:`core.MassBalanceModel`
+        User-povided MassBalanceModel instance for the spinup before the
+        historical run. Default is to use a ConstantMassBalance model together
+        with the provided parameter climate_input_filesuffix and during the
+        period of spinup_start_yr until rgi_year (e.g. 1979 - 2000).
+    minimise_for : str
+        The variable we want to match at target_yr. Options are 'area' or
+        'volume'.
+        Default is 'area'.
+    climate_input_filesuffix : str
+        filesuffix for the input climate file
+        Default is ''
+    spinup_period : int
+        The period how long the spinup should run. Start date of historical run
+        is defined "target_yr - spinup_period". Minimum allowed value is
+        defined with 'min_spinup_period'. If the provided climate data starts
+        at year later than (target_yr - spinup_period) the spinup_period is set
+        to (target_yr - yr_climate_start). Caution if spinup_start_yr is set
+        the spinup_period is ignored.
+        Default is 20
+    min_spinup_period : int
+        If the dynamic spinup function fails with the initial 'spinup_period'
+        a shorter period is tried. Here you can define the minimum period to
+        try.
+        Default is 10
+    target_yr : int or None
+        The target year at which we want to match area or volume.
+        If None, gdir.rgi_date + 1 is used (the default).
+        Default is None
+    precision_percent : float
+        Gives the precision we want to match for the selected variable
+        ('minimise_for') at rgi_date in percent. The algorithm makes sure that
+        the resulting relative mismatch is smaller than precision_percent, but
+        also that the absolute value is smaller than precision_absolute.
+        Default is 1, meaning the difference must be within 1% of the given
+        value (area or volume).
+    precision_absolute : float
+        Gives an minimum absolute value to match. The algorithm makes sure that
+        the resulting relative mismatch is smaller than
+        precision_percent, but also that the absolute value is
+        smaller than precision_absolute.
+        The unit of precision_absolute depends on minimise_for (if 'area' in
+        km2, if 'volume' in km3)
+        Default is 1.
+    min_ice_thickness : float
+        Gives an minimum ice thickness for model grid points which are counted
+        to the total model value. This could be useful to filter out seasonal
+        'glacier growth', as OGGM do not differentiate between snow and ice in
+        the forward model run. Therefore you could see quite fast changes
+        (spikes) in the time-evolution (especially visible in length and area).
+        If you set this value to 0 the filtering can be switched off.
+        Default is cfg.PARAMS['dynamic_spinup_min_ice_thick'].
+    first_guess_t_spinup : float
+        The initial guess for the temperature bias for the spinup
+        MassBalanceModel in °C.
+        Default is -2.
+    t_spinup_max_step_length : float
+        Defines the maximums allowed change of t_spinup between two iterations.
+        Is needed to avoid to large changes.
+        Default is 2
+    maxiter : int
+        Maximum number of minimisation iterations per dynamic spinup where area
+        or volume is tried to be matched. If reached and 'ignore_errors=False'
+        an error is raised.
+        Default is 30
+    store_model_geometry : bool
+        whether to store the full model geometry run file to disk or not.
+        Default is True
+    store_fl_diagnostics : bool or None
+        Whether to store the model flowline diagnostics to disk or not.
+        Default is None (-> cfg.PARAMS['store_fl_diagnostics'])
+    local_variables : dict
+        User MUST provide a dictionary here. This dictionary is used to save
+        the last temperature bias from the previous dynamic spinup run (for
+        optimisation) and the initial glacier volume. User must take care that
+        this variables are not changed outside this function!
+        Default is None (-> raise an error if no dict is provided)
+    set_local_variables : bool
+        If True this resets the local_variables to their initial state. It
+        sets the first_guess_t_spinup with the key 't_spinup' AND sets the
+        current glacier volume with the key 'vol_m3_ref' which is later used in
+        the calibration during inversion.
+        Default is False
+    do_inversion : bool
+        If True a complete inversion is conducted using the provided melt_f
+        before the actual calibration run.
+        Default is False
+    spinup_start_yr_max : int or None
+        Possibility to provide a maximum year where the dynamic spinup must
+        start from at least. If set, this overrides the min_spinup_period if
+        target_yr - spinup_start_yr_max > min_spinup_period. If None it is set
+        to yr0_ref_mb.
+        Default is None
+    add_fixed_geometry_spinup : bool
+        If True and the original spinup_period of the dynamical spinup must be
+        shortened (due to ice-free or out-of-boundary error) a
+        fixed-geometry-spinup is added at the beginning so that the resulting
+        model run always starts from ys.
+        Default is True
+    kwargs : dict
+        kwargs to pass to the evolution_model instance
+
+    Returns
+    -------
+    :py:class:`oggm.core.flowline.evolution_model`, float
+        The final model after the run and the calculated geodetic mass balance
+    """
+
+    evolution_model = IGM_Model2D
+
+    if not isinstance(local_variables, dict):
+        raise ValueError('You must provide a dict for local_variables!')
+
+    from oggm.workflow import calibrate_inversion_from_consensus
+
+    if set_local_variables:
+        # clear the provided dictionary and set the first elements
+        local_variables.clear()
+        local_variables['t_spinup'] = [first_guess_t_spinup]
+        # ATTENTION: it is assumed that the flowlines in gdir have the volume
+        # we want to match during calibrate_inversion_from_consensus when we
+        # set_local_variables
+
+        # TODO here the reference volume has to be set? what reference volume? => ref volume for the inversion: ignore
+        # TODO for now
+        # fls_ref = gdir.read_pickle('model_flowlines')
+        # local_variables['vol_m3_ref'] = np.sum([f.volume_m3 for f in fls_ref])
+
+        # we are done with preparing the local_variables for the upcoming iterations
+        return None
+
+    if target_yr is None:
+        target_yr = gdir.rgi_date + 1  # + 1 converted to hydro years
+    if min_spinup_period > target_yr - ys:
+        log.info('The target year is closer to ys as the minimum spinup '
+                 'period -> therefore the minimum spinup period is '
+                 'adapted and it is the only period which is tried by the '
+                 'dynamic spinup function!')
+        min_spinup_period = target_yr - ys
+        spinup_period = target_yr - ys
+
+    if spinup_start_yr_max is None:
+        spinup_start_yr_max = yr0_ref_mb
+
+    if spinup_start_yr_max > yr0_ref_mb:
+        log.info('The provided maximum start year is larger then the '
+                 'start year of the geodetic period, therefore it will be '
+                 'set to the start year of the geodetic period!')
+        spinup_start_yr_max = yr0_ref_mb
+
+    #### INVERSION CODE: IGNORE FOR NOW!
+    # check that inversion is only possible without providing own fls
+    # if do_inversion:
+    #     if not np.all([np.all(getattr(fl_prov, 'surface_h') ==
+    #                           getattr(fl_orig, 'surface_h')) and
+    #                    np.all(getattr(fl_prov, 'bed_h') ==
+    #                           getattr(fl_orig, 'bed_h'))
+    #                    for fl_prov, fl_orig in
+    #                    zip(fls_init, gdir.read_pickle('model_flowlines'))]):
+    #         raise InvalidWorkflowError('If you want to perform a dynamic '
+    #                                    'melt_f calibration including an '
+    #                                    'inversion, it is not possible to '
+    #                                    'provide your own flowlines! (fls_init '
+    #                                    'should be None or '
+    #                                    'the original model_flowlines)')
+
+    # Here we start with the actual model run
+    if melt_f == gdir.read_json('mb_calib')['melt_f']:
+        # we do not need to define a new melt_f or do an inversion
+        do_inversion = False
+    else:
+        define_new_melt_f_in_gdir(gdir, melt_f)
+    ### INVERSION CODE: IGNORE FOR NOW!
+    # if do_inversion:
+    #     with utils.DisableLogger():
+    #         apparent_mb_from_any_mb(gdir,
+    #                                 add_to_log_file=False,  # dont write to log
+    #                                 )
+    #         # do inversion with A calibration to current volume
+    #         calibrate_inversion_from_consensus(
+    #             [gdir], apply_fs_on_mismatch=True, error_on_mismatch=False,
+    #             filter_inversion_output=True,
+    #             volume_m3_reference=local_variables['vol_m3_ref'],
+    #             add_to_log_file=False)
+
+    # this is used to keep the original model_flowline unchanged (-> to be able
+    # to conduct different dynamic calibration runs in the same gdir)
+    calib_model_filesuffix = '_dyn_melt_f_calib'
+    # init_present_time_glacier(gdir, filesuffix=model_flowline_filesuffix,
+    #                           add_to_log_file=False)
+
+    # Now do a dynamic spinup to match area
+    # do not ignore errors in dynamic spinup, so all 'bad'/intermediate files
+    # are deleted in run_dynamic_spinup function
+    try:
+        model, last_best_t_spinup = run_dynamic_ioggm_spinup(
+            gdir,
+            continue_on_error=False,  # force to raise an error in @entity_task
+            add_to_log_file=False,  # dont write to log file in @entity_task
+            init_model_geom=geom_init,
+            climate_input_filesuffix=climate_input_filesuffix,
+            evolution_model=evolution_model,
+            mb_model_historical=mb_model_historical,
+            mb_model_spinup=mb_model_spinup,
+            spinup_period=spinup_period,
+            spinup_start_yr=ys,
+            spinup_start_yr_max=spinup_start_yr_max,
+            min_spinup_period=min_spinup_period, target_yr=target_yr,
+            precision_percent=precision_percent,
+            precision_absolute=precision_absolute,
+            min_ice_thickness=min_ice_thickness,
+            t_spinup_max_step_length=t_spinup_max_step_length,
+            maxiter=maxiter,
+            minimise_for=minimise_for,
+            first_guess_t_spinup=local_variables['t_spinup'][-1],
+            output_filesuffix=output_filesuffix,
+            store_model_evolution=True, ignore_errors=False,
+            return_t_spinup_best=True, ye=ye,
+            store_model_geometry=store_model_geometry,
+            store_diagnostics=store_diagnostics,
+            add_fixed_geometry_spinup=add_fixed_geometry_spinup,
+            **kwargs)
+        # save the temperature bias which was successful in the last iteration
+        # as we expect we are not so far away in the next iteration (only
+        # needed for optimisation, potentially need less iterations in
+        # run_dynamic_spinup)
+        local_variables['t_spinup'].append(last_best_t_spinup)
+    except RuntimeError as e:
+        raise RuntimeError(f'Dynamic spinup raised error! (Message: {e})')
+
+    # calculate dmdtda from previous simulation here
+    with utils.DisableLogger():
+        fp = gdir.get_filepath('ioggm_diagnostics',
+                          filesuffix=output_filesuffix)
+        ds = xr.open_dataset(fp)
+        gridpoint_area = gdir.grid.dx ** 2
+        ds['volume'] = ds.ice_thickness.sum(dim=['x', 'y']) * gridpoint_area * 1e-9
+    dmdtda_mdl = ((ds.volume.sel(time=yr1_ref_mb).item() -
+                   ds.volume.sel(time=yr0_ref_mb).item()) /
+                  gdir.rgi_area_m2 /
+                  (yr1_ref_mb - yr0_ref_mb) *
+                  cfg.PARAMS['ice_density'])
+    print('RAN THE SPINUP: CURRENT DMDTDA_mdl is{}'.format(dmdtda_mdl))
+
+
+    return model, dmdtda_mdl
+
+
+def dynamic_melt_f_run_with_dynamic_spinup_fallback(
+        gdir, melt_f, geom_init, ys, ye, local_variables, output_filesuffix='',
+        evolution_model=None, minimise_for='area',
+        mb_model_historical=None, mb_model_spinup=None,
+        climate_input_filesuffix='', spinup_period=20, min_spinup_period=10,
+        target_yr=None, precision_percent=1,
+        precision_absolute=1, min_ice_thickness=None,
+        first_guess_t_spinup=-2, t_spinup_max_step_length=2, maxiter=30,
+        store_model_geometry=True, store_fl_diagnostics=None,
+        do_inversion=True, spinup_start_yr_max=None,
+        add_fixed_geometry_spinup=True, **kwargs):
+    """
+    This is the fallback function corresponding to the function
+    'dynamic_melt_f_run_with_dynamic_spinup', which are provided
+    to 'run_dynamic_melt_f_calibration'. It is used if the run_function fails and
+    if 'ignore_error == True' in 'run_dynamic_melt_f_calibration'. First it resets
+    melt_f of gdir. Afterwards it tries to conduct a dynamic spinup. If this
+    also fails the last thing is to just do a run without a dynamic spinup
+    (only a fixed geometry spinup).
+
+    Parameters
+    ----------
+    gdir : :py:class:`oggm.GlacierDirectory`
+        the glacier directory to process
+    melt_f : float
+        the melt_f used for this run
+    fls_init : []
+        List of flowlines to use to initialise the model
+    ys : int
+        start year of the run
+    ye : int
+        end year of the run
+    local_variables : dict
+        Dict in which under the key 'vol_m3_ref' the volume which is used in
+        'calibrate_inversion_from_consensus'
+    output_filesuffix : str
+        For the output file.
+        Default is ''
+    evolution_model : :class:oggm.core.FlowlineModel
+        which evolution model to use. Default: cfg.PARAMS['evolution_model']
+        Not all models work in all circumstances!
+    mb_model_historical : :py:class:`core.MassBalanceModel`
+        User-povided MassBalanceModel instance for the historical run. Default
+        is to use a MonthlyTIModel model  together with the provided
+        parameter climate_input_filesuffix.
+    mb_model_spinup : :py:class:`core.MassBalanceModel`
+        User-povided MassBalanceModel instance for the spinup before the
+        historical run. Default is to use a ConstantMassBalance model together
+        with the provided parameter climate_input_filesuffix and during the
+        period of spinup_start_yr until rgi_year (e.g. 1979 - 2000).
+    minimise_for : str
+        The variable we want to match at target_yr. Options are 'area' or
+        'volume'.
+        Default is 'area'.
+    climate_input_filesuffix : str
+        filesuffix for the input climate file
+        Default is ''
+    spinup_period : int
+        The period how long the spinup should run. Start date of historical run
+        is defined "target_yr - spinup_period". Minimum allowed value is
+        defined with 'min_spinup_period'. If the provided climate data starts
+        at year later than (target_yr - spinup_period) the spinup_period is set
+        to (target_yr - yr_climate_start). Caution if spinup_start_yr is set
+        the spinup_period is ignored.
+        Default is 20
+    min_spinup_period : int
+        If the dynamic spinup function fails with the initial 'spinup_period'
+        a shorter period is tried. Here you can define the minimum period to
+        try.
+        Default is 10
+    target_yr : int or None
+        The rgi date, at which we want to match area or volume.
+        If None, gdir.rgi_date + 1 is used (the default).
+        Default is None
+    precision_percent : float
+        Gives the precision we want to match for the selected variable
+        ('minimise_for') at rgi_date in percent. The algorithm makes sure that
+        the resulting relative mismatch is smaller than precision_percent, but
+        also that the absolute value is smaller than precision_absolute.
+        Default is 1, meaning the difference must be within 1% of the given
+        value (area or volume).
+    precision_absolute : float
+        Gives an minimum absolute value to match. The algorithm makes sure that
+        the resulting relative mismatch is smaller than
+        precision_percent, but also that the absolute value is
+        smaller than precision_absolute.
+        The unit of precision_absolute depends on minimise_for (if 'area' in
+        km2, if 'volume' in km3)
+        Default is 1.
+    min_ice_thickness : float
+        Gives an minimum ice thickness for model grid points which are counted
+        to the total model value. This could be useful to filter out seasonal
+        'glacier growth', as OGGM do not differentiate between snow and ice in
+        the forward model run. Therefore you could see quite fast changes
+        (spikes) in the time-evolution (especially visible in length and area).
+        If you set this value to 0 the filtering can be switched off.
+        Default is cfg.PARAMS['dynamic_spinup_min_ice_thick'].
+    first_guess_t_spinup : float
+        The initial guess for the temperature bias for the spinup
+        MassBalanceModel in °C.
+        Default is -2.
+    t_spinup_max_step_length : float
+        Defines the maximums allowed change of t_spinup between two iterations. Is
+        needed to avoid to large changes.
+        Default is 2
+    maxiter : int
+        Maximum number of minimisation iterations per dynamic spinup where area
+        or volume is tried to be matched. If reached and 'ignore_errors=False'
+        an error is raised.
+        Default is 30
+    store_model_geometry : bool
+        whether to store the full model geometry run file to disk or not.
+        Default is True
+    store_fl_diagnostics : bool or None
+        Whether to store the model flowline diagnostics to disk or not.
+        Default is None (-> cfg.PARAMS['store_fl_diagnostics'])
+    do_inversion : bool
+        If True a complete inversion is conducted using the provided melt_f
+        before the actual fallback run.
+        Default is False
+    spinup_start_yr_max : int or None
+        Possibility to provide a maximum year where the dynamic spinup must
+        start from at least. If set, this overrides the min_spinup_period if
+        target_yr - spinup_start_yr_max > min_spinup_period.
+        Default is None
+    add_fixed_geometry_spinup : bool
+        If True and the original spinup_period of the dynamical spinup must be
+        shortened (due to ice-free or out-of-boundary error) a
+        fixed-geometry-spinup is added at the beginning so that the resulting
+        model run always starts from ys.
+        Default is True
+    kwargs : dict
+        kwargs to pass to the evolution_model instance
+
+    Returns
+    -------
+    :py:class:`oggm.core.flowline.evolution_model`
+        The final model after the run.
+    """
+    # from oggm.workflow import calibrate_inversion_from_consensus
+
+    evolution_model = IGM_Model2D
+
+    if local_variables is None:
+        raise RuntimeError('Need the volume to do'
+                           'calibrate_inversion_from_consensus provided in '
+                           'local_variables!')
+
+    # revert gdir to original state if necessary
+    if melt_f != gdir.read_json('mb_calib')['melt_f']:
+        define_new_melt_f_in_gdir(gdir, melt_f)
+    #     if do_inversion:
+    #         with utils.DisableLogger():
+    #             apparent_mb_from_any_mb(gdir,
+    #                                     add_to_log_file=False)
+    #             calibrate_inversion_from_consensus(
+    #                 [gdir], apply_fs_on_mismatch=True, error_on_mismatch=False,
+    #                 filter_inversion_output=True,
+    #                 volume_m3_reference=local_variables['vol_m3_ref'],
+    #                 add_to_log_file=False)
+    # if os.path.isfile(os.path.join(gdir.dir,
+    #                                'model_flowlines_dyn_melt_f_calib.pkl')):
+    #     os.remove(os.path.join(gdir.dir,
+    #                            'model_flowlines_dyn_melt_f_calib.pkl'))
+
+    if target_yr is None:
+        target_yr = gdir.rgi_date + 1  # + 1 converted to hydro years
+    if min_spinup_period > target_yr - ys:
+        log.info('The RGI year is closer to ys as the minimum spinup '
+                 'period -> therefore the minimum spinup period is '
+                 'adapted and it is the only period which is tried by the '
+                 'dynamic spinup function!')
+        min_spinup_period = target_yr - ys
+        spinup_period = target_yr - ys
+
+    yr_clim_min = gdir.get_climate_info()['baseline_yr_0']
+    try:
+        model_end = run_dynamic_ioggm_spinup(
+            gdir,
+            continue_on_error=False,  # force to raise an error in @entity_task
+            add_to_log_file=False,
+            init_model_geom=geom_init,
+            climate_input_filesuffix=climate_input_filesuffix,
+            evolution_model=evolution_model,
+            mb_model_historical=mb_model_historical,
+            mb_model_spinup=mb_model_spinup,
+            spinup_period=spinup_period,
+            spinup_start_yr=ys,
+            min_spinup_period=min_spinup_period,
+            spinup_start_yr_max=spinup_start_yr_max,
+            target_yr=target_yr,
+            minimise_for=minimise_for,
+            precision_percent=precision_percent,
+            precision_absolute=precision_absolute,
+            min_ice_thickness=min_ice_thickness,
+            first_guess_t_spinup=first_guess_t_spinup,
+            t_spinup_max_step_length=t_spinup_max_step_length,
+            maxiter=maxiter,
+            output_filesuffix=output_filesuffix,
+            store_model_geometry=store_model_geometry,
+            store_fl_diagnostics=store_fl_diagnostics,
+            ignore_errors=False,
+            ye=ye,
+            add_fixed_geometry_spinup=add_fixed_geometry_spinup,
+            **kwargs)
+
+        gdir.add_to_diagnostics('used_spinup_option', 'dynamic spinup only')
+
+    except RuntimeError:
+        log.warning('No dynamic spinup could be conducted by using the '
+                    f'original melt factor ({melt_f}). Therefore the last '
+                    'try is to conduct a run until ye without a dynamic '
+                    'spinup.')
+
+        # set all dynamic diagnostics to None if there where some successful
+        # runs
+        diag = gdir.get_diagnostics()
+        if minimise_for == 'area':
+            unit = 'km2'
+        elif minimise_for == 'volume':
+            unit = 'km3'
+        else:
+            raise NotImplementedError
+        for key in ['temp_bias_dynamic_spinup', 'dynamic_spinup_period',
+                    'dynamic_spinup_forward_model_iterations',
+                    f'{minimise_for}_mismatch_dynamic_spinup_{unit}_percent',
+                    f'reference_{minimise_for}_dynamic_spinup_{unit}',
+                    'dynamic_spinup_other_variable_reference',
+                    'dynamic_spinup_mismatch_other_variable_percent']:
+            if key in diag:
+                gdir.add_to_diagnostics(key, None)
+
+        gdir.add_to_diagnostics('run_dynamic_spinup_success', False)
+
+        # TODO: if necessary, think about fixed geometry spinup
+        # try to make a fixed geometry spinup
+        # model_end = run_from_climate_data(
+        #     gdir,
+        #     continue_on_error=False,  # force to raise an error in @entity_task
+        #     add_to_log_file=False,
+        #     min_ys=yr_clim_min, ye=ye,
+        #     output_filesuffix=output_filesuffix,
+        #     climate_input_filesuffix=climate_input_filesuffix,
+        #     store_model_geometry=store_model_geometry,
+        #     store_fl_diagnostics=store_fl_diagnostics,
+        #     init_model_fls=fls_init, evolution_model=evolution_model,
+        #     fixed_geometry_spinup_yr=ys)
+        #
+        # gdir.add_to_diagnostics('used_spinup_option', 'fixed geometry spinup')
+
+    return model_end
+
+@entity_task(log, writes=['inversion_flowlines'])
+def run_dynamic_ioggm_melt_f_calibration(
+        gdir, ref_dmdtda=None, err_ref_dmdtda=None, err_dmdtda_scaling_factor=1,
+        ref_period='', melt_f_min=None,
+        melt_f_max=None, melt_f_max_step_length_minimum=0.1, maxiter=20,
+        ignore_errors=False, output_filesuffix='_dynamic_ioggm_melt_f',
+        ys=None, ye=None, target_yr=None,
+        run_function=dynamic_melt_f_run_with_dynamic_spinup,
+        kwargs_run_function=None,
+        fallback_function=dynamic_melt_f_run_with_dynamic_spinup_fallback,
+        kwargs_fallback_function=None, init_model_filesuffix=None,
+        init_model_yr=None, init_model_geom=None,
+        first_guess_diagnostic_msg='dynamic spinup only'):
+    """Calibrate melt_f to match a geodetic mass balance incorporating a
+    dynamic model run.
+
+    This task iteratively search for a melt_f to match a provided geodetic
+    mass balance. How one model run looks like is defined in the 'run_function'.
+    This function should take a new melt_f guess, conducts a dynamic run and
+    calculate the geodetic mass balance. The goal is to match the geodetic mass
+    blanance 'ref_dmdtda' inside the provided error 'err_ref_dmdtda'. If the
+    minimisation of the mismatch between the provided and modeled geodetic mass
+    balance is not working the 'fallback_function' is called. In there it is
+    decided what run should be conducted in such a failing case. Further if
+    'ignore_error' is set to True and we could not find a satisfying mismatch
+    the best run so far is saved (if not one successful run with 'run_function'
+    the 'fallback_function' is called).
+
+    Parameters
+    ----------
+    gdir : :py:class:`oggm.GlacierDirectory`
+        the glacier directory to process
+    ref_dmdtda : float or None
+        The reference geodetic mass balance to match (units: kg m-2 yr-1). If
+        None the data from Hugonnet 2021 is used.
+        Default is None
+    err_ref_dmdtda : float or None
+        The error of the reference geodetic mass balance to match (unit: kg m-2
+        yr-1). Must always be a positive number. If None the data from Hugonett
+        2021 is used.
+        Default is None
+    err_dmdtda_scaling_factor : float
+        The error of the geodetic mass balance is multiplied by this factor.
+        When looking at more glaciers you should set this factor smaller than
+        1 (Default), but the smaller this factor the more glaciers will fail
+        during calibration. The factor is only used if ref_dmdtda = None and
+        err_ref_dmdtda = None.
+        The idea is that we reduce the uncertainty of individual observations
+        to count for correlated uncertainties when looking at regional or
+        global scales. If err_scaling_factor is 1 (Default) and you look at the
+        results of more than one glacier this equals that all errors are
+        uncorrelated. Therefore the result will be outside the uncertainty
+        boundaries given in Hugonett 2021 e.g. for the global estimate, because
+        some correlation of the individual errors is assumed during aggregation
+        of glaciers to regions (for more details see paper Hugonett 2021).
+    ref_period : str
+        If ref_dmdtda is None one of '2000-01-01_2010-01-01',
+        '2010-01-01_2020-01-01', '2000-01-01_2020-01-01'. If ref_dmdtda is
+        set, this should still match the same format but can be any date.
+        Default is '' (-> PARAMS['geodetic_mb_period'])
+    melt_f_min : float or None
+        Lower absolute limit for melt_f.
+        Default is None (-> cfg.PARAMS['melt_f_min'])
+    melt_f_max : float or None
+        Upper absolute limit for melt_f.
+        Default is None (-> cfg.PARAMS['melt_f_max'])
+    melt_f_max_step_length_minimum : float
+        Defines a minimum maximal change of melt_f between two iterations. The
+        maximum step length is needed to avoid too large steps, which likely
+        lead to an error.
+        Default is 0.1
+    maxiter : int
+        Maximum number of minimisation iterations of minimising mismatch to
+        dmdtda by changing melt_f. Each of this iterations conduct a complete
+        run defined in the 'run_function'. If maxiter reached and
+        'ignore_errors=False' an error is raised.
+        Default is 20
+    ignore_errors : bool
+        If True and the 'run_function' with melt_f calibration is not working
+        to match dmdtda inside the provided uncertainty fully, but their where
+        some successful runs which improved the first guess, they are saved as
+        part success, and if not a single run was successful the
+        'fallback_function' is called.
+        If False and the 'run_function' with melt_f calibration is not working
+        fully an error is raised.
+        Default is True
+    output_filesuffix : str
+        For the output file.
+        Default is '_dynamic_melt_f'
+    ys : int or None
+        The start year of the conducted run. If None the first year of the
+        provided climate file.
+        Default is None
+    ye : int or None
+        The end year of the conducted run. If None the last year of the
+        provided climate file.
+        Default is None
+    target_yr : int or None
+        The target year for a potential dynamic spinup (see run_dynamic_spinup
+        function for more info).
+        If None, gdir.rgi_date + 1 is used (the default).
+        Default is None
+    run_function : function
+        This function defines how a new defined melt_f is used to conduct the
+        next model run. This function must contain the arguments 'gdir',
+        'melt_f', 'yr0_ref_mb', 'yr1_ref_mb', 'fls_init', 'ys', 'ye' and
+        'output_filesuffix'. Further this function must return the final model
+        and the calculated geodetic mass balance dmdtda in kg m-2 yr-1.
+    kwargs_run_function : None or dict
+        Can provide additional keyword arguments to the run_function as a
+        dictionary.
+    fallback_function : function
+        This is a fallback function if the calibration is not working using
+        'run_function' it is called. This function must contain the arguments
+        'gdir', 'melt_f', 'fls_init', 'ys', 'ye', 'local_variables' and
+        'output_filesuffix'. Further this function should return the final
+        model.
+    kwargs_fallback_function : None or dict
+        Can provide additional keyword arguments to the fallback_function as a
+        dictionary.
+    init_model_filesuffix : str or None
+        If you want to start from a previous model run state. This state
+        should be at time yr_rgi_date.
+        Default is None
+    init_model_yr : int or None
+        the year of the initial run you want to start from. The default
+        is to take the last year of the simulation.
+    init_model_geom : xarray.DataArray
+        2D xarray data to initialise the model (the default is the
+        cook_23 dataset).
+        Ignored if `init_model_filesuffix` is set
+    first_guess_diagnostic_msg : str
+        This message will be added to the glacier diagnostics if only the
+        default melt_f resulted in a successful 'run_function' run.
+        Default is 'dynamic spinup only'
+
+    Returns
+    -------
+    :py:class:`oggm.core.flowline.evolution_model`
+        The final dynamically spined-up model. Type depends on the selected
+        evolution_model.
+    """
+    # melt_f constraints
+    if melt_f_min is None:
+        melt_f_min = cfg.PARAMS['melt_f_min']
+    if melt_f_max is None:
+        melt_f_max = cfg.PARAMS['melt_f_max']
+
+    if kwargs_run_function is None:
+        kwargs_run_function = {}
+    if kwargs_fallback_function is None:
+        kwargs_fallback_function = {}
+
+    # geodetic mb stuff
+    if not ref_period:
+        ref_period = cfg.PARAMS['geodetic_mb_period']
+    # if a reference geodetic mb is specified also the error of it must be
+    # specified, and vice versa
+    if ((ref_dmdtda is None and err_ref_dmdtda is not None) or
+            (ref_dmdtda is not None and err_ref_dmdtda is None)):
+        raise RuntimeError('If you provide a reference geodetic mass balance '
+                           '(ref_dmdtda) you must also provide an error for it '
+                           '(err_ref_dmdtda), and vice versa!')
+    # Get the reference geodetic mb and error if not given
+    if ref_dmdtda is None:
+        df_ref_dmdtda = utils.get_geodetic_mb_dataframe().loc[gdir.rgi_id]
+        sel = df_ref_dmdtda.loc[df_ref_dmdtda['period'] == ref_period].iloc[0]
+        # reference geodetic mass balance from Hugonnet 2021
+        ref_dmdtda = float(sel['dmdtda'])
+        # dmdtda: in meters water-equivalent per year -> we convert
+        ref_dmdtda *= 1000  # kg m-2 yr-1
+        # error of reference geodetic mass balance from Hugonnet 2021
+        err_ref_dmdtda = float(sel['err_dmdtda'])
+        err_ref_dmdtda *= 1000  # kg m-2 yr-1
+        err_ref_dmdtda *= err_dmdtda_scaling_factor
+
+    if err_ref_dmdtda <= 0:
+        raise RuntimeError('The provided error for the geodetic mass-balance '
+                           '(err_ref_dmdtda) must be positive and non zero! But'
+                           f'given was {err_ref_dmdtda}!')
+    # get start and end year of geodetic mb
+    yr0_ref_mb, yr1_ref_mb = ref_period.split('_')
+    yr0_ref_mb = int(yr0_ref_mb.split('-')[0])
+    yr1_ref_mb = int(yr1_ref_mb.split('-')[0])
+
+    clim_info = gdir.get_climate_info()
+
+    if ye is None:
+        # One adds 1 because the run ends at the end of the year
+        ye = clim_info['baseline_yr_1'] + 1
+
+    if ye < yr1_ref_mb:
+        raise RuntimeError('The provided ye is smaller than the end year of '
+                           'the given geodetic_mb_period!')
+
+    if ys is None:
+        ys = clim_info['baseline_yr_0']
+
+    if ys > yr0_ref_mb:
+        raise RuntimeError('The provided ys is larger than the start year of '
+                           'the given geodetic_mb_period!')
+
+    if target_yr is None:
+        target_yr = gdir.rgi_date + 1  # + 1 converted to hydro years
+    if target_yr < ys:
+        if ignore_errors:
+            log.info('The rgi year is smaller than the provided start year '
+                     'ys -> setting the rgi year to ys to continue!')
+            target_yr = ys
+        else:
+            raise RuntimeError('The rgi year is smaller than the provided '
+                               'start year ys!')
+    kwargs_run_function['target_yr'] = target_yr
+    kwargs_fallback_function['target_yr'] = target_yr
+
+    # get initial modelstate from which we want to start from
+    if init_model_filesuffix is not None:
+        fp = gdir.get_filepath('ioggm_geometry', filesuffix=init_model_filesuffix)
+        init_model = xr.open_dataset(fp)
+        if init_model_yr is None:
+            # get the last model year
+            init_model_yr = init_model.coords["time"].values[-1]
+        init_model_geom = init_model.ice_thickness.sel(time=init_model_yr)
+
+    if init_model_geom is None:
+        # in the original spinup this would load a
+        # 'copy' of the just done inversion(for the melt_f adaption). as we don't do an inversion we just always start
+        # from cook data or an actual geometry that is passed.
+        # load the IGM Inversion as a starting ice volume
+        cook23.cook23_to_gdir(gdir)
+        # load the gridded data that's needed for the 2DModel
+        with xr.open_dataset(gdir.get_filepath('gridded_data')) as gd:
+            gd = gd.load()
+        # set values outside the glacier to np.nan
+        # using the glacier mask, as otherwise there is more ice from surrounding glaciers in the domain,
+        # which shouldn't accumulate more ice, still adds to the total volume/area of the domain.. either mask it out beforehand or before doing plots.
+        gd['cook23_thk_masked'] = xr.where(gd.glacier_mask, gd.cook23_thk, np.nan)
+        geom_init = gd['cook23_thk_masked']
+    else:
+        geom_init = copy.copy(init_model_geom)
+    # TODO: maybe add a check if the data passed matches the resolution of the gdir
+    # utils.model_geom_is_valid(gdir, model_geom_spinup)
+
+    # save original melt_f for later to be able to recreate original gdir
+    # (using the fallback function) if an error occurs
+    melt_f_initial = gdir.read_json('mb_calib')['melt_f']
+
+    # define maximum allowed change of melt_f between two iterations. Is needed
+    # to avoid to large changes (=likely lead to an error). It is defined in a
+    # way that in maxiter steps the further away limit can be reached
+    melt_f_max_step_length = np.max(
+        [np.max(np.abs(np.array([melt_f_min, melt_f_min]) - melt_f_initial)) /
+         maxiter,
+         melt_f_max_step_length_minimum])
+
+    # only used to check performance of minimisation
+    dynamic_melt_f_calibration_runs = [0]
+
+    # this function is called if the actual dynamic melt_f calibration fails
+    def fallback_run(melt_f, reset, best_mismatch=None, initial_mismatch=None,
+                     only_first_guess=None):
+        if reset:
+            # unfortunately we could not conduct an error free run using the
+            # provided run_function, so we us the fallback_function
+
+            # this diagnostics should be overwritten inside the fallback_function
+            gdir.add_to_diagnostics('used_spinup_option', 'fallback_function')
+
+            model = fallback_function(gdir=gdir, melt_f=melt_f,
+                                      geom_init=geom_init, ys=ys, ye=ye,
+                                      local_variables=local_variables_run_function,
+                                      output_filesuffix=output_filesuffix,
+                                      **kwargs_fallback_function)
+        else:
+            # we were not able to reach the desired precision during the
+            # minimisation, but at least we conducted a few error free runs
+            # using the run_function, and therefore we save the best guess we
+            # found so far
+            if only_first_guess:
+                gdir.add_to_diagnostics('used_spinup_option',
+                                        first_guess_diagnostic_msg)
+            else:
+                gdir.add_to_diagnostics('used_spinup_option',
+                                        'dynamic melt_f calibration (part '
+                                        'success)')
+            model, dmdtda_mdl = run_function(gdir=gdir, melt_f=melt_f,
+                                             yr0_ref_mb=yr0_ref_mb,
+                                             yr1_ref_mb=yr1_ref_mb,
+                                             geom_init=geom_init, ys=ys, ye=ye,
+                                             output_filesuffix=output_filesuffix,
+                                             local_variables=local_variables_run_function,
+                                             **kwargs_run_function)
+
+            gdir.add_to_diagnostics(
+                'dmdtda_mismatch_dynamic_calibration_reference',
+                float(ref_dmdtda))
+            gdir.add_to_diagnostics(
+                'dmdtda_dynamic_calibration_given_error',
+                float(err_ref_dmdtda))
+            gdir.add_to_diagnostics('dmdtda_dynamic_calibration_error_scaling_factor',
+                                    float(err_dmdtda_scaling_factor))
+            gdir.add_to_diagnostics(
+                'dmdtda_mismatch_dynamic_calibration',
+                float(best_mismatch))
+            gdir.add_to_diagnostics(
+                'dmdtda_mismatch_with_initial_melt_f',
+                float(initial_mismatch))
+            gdir.add_to_diagnostics('melt_f_dynamic_calibration',
+                                    float(melt_f))
+            gdir.add_to_diagnostics('melt_f_before_dynamic_calibration',
+                                    float(melt_f_initial))
+            gdir.add_to_diagnostics('run_dynamic_melt_f_calibration_iterations',
+                                    int(dynamic_melt_f_calibration_runs[-1]))
+
+        return model
+
+    # here we define the local variables which are used in the run_function,
+    # for some run_functions this is useful to save parameters from a previous
+    # run to be faster in the upcoming runs
+    local_variables_run_function = {}
+    run_function(gdir=gdir, melt_f=None, yr0_ref_mb=None, yr1_ref_mb=None,
+                 geom_init=geom_init, ys=None, ye=None,
+                 local_variables=local_variables_run_function,
+                 set_local_variables=True, store_diagnostics=True,
+                 **kwargs_run_function)
+
+    # this is the actual model run which is executed each iteration in order to
+    # minimise the mismatch of dmdtda of model and observation
+    def model_run(melt_f):
+        # to check performance of minimisation
+        dynamic_melt_f_calibration_runs.append(
+            dynamic_melt_f_calibration_runs[-1] + 1)
+
+        model, dmdtda_mdl = run_function(gdir=gdir, melt_f=melt_f,
+                                         yr0_ref_mb=yr0_ref_mb,
+                                         yr1_ref_mb=yr1_ref_mb,
+                                         geom_init=geom_init, ys=ys, ye=ye,
+                                         output_filesuffix=output_filesuffix,
+                                         local_variables=local_variables_run_function,
+                                         store_diagnostics=True,
+                                         **kwargs_run_function)
+        return model, dmdtda_mdl
+
+    def cost_fct(melt_f, model_dynamic_spinup_end):
+
+        # actual model run
+        model_dynamic_spinup, dmdtda_mdl = model_run(melt_f)
+
+        # save final model for later
+        model_dynamic_spinup_end.append(copy.copy(model_dynamic_spinup))
+
+        # calculate the mismatch of dmdtda
+        cost = float(dmdtda_mdl - ref_dmdtda)
+
+        return cost
+
+    def init_cost_fun():
+        model_dynamic_spinup_end = []
+
+        def c_fun(melt_f):
+            return cost_fct(melt_f, model_dynamic_spinup_end)
+
+        return c_fun, model_dynamic_spinup_end
+
+    # Here start with own spline minimisation algorithm
+    def minimise_with_spline_fit(fct_to_minimise, melt_f_guess, mismatch):
+        # defines limits of melt_f in accordance to maximal allowed change
+        # between iterations
+        melt_f_limits = [max(melt_f_initial - melt_f_max_step_length,
+                             melt_f_min),
+                         min(melt_f_initial + melt_f_max_step_length,
+                             melt_f_max)]
+
+        # this two variables indicate that the limits were already adapted to
+        # avoid an error
+        was_min_error = False
+        was_max_error = False
+        was_errors = [was_min_error, was_max_error]
+
+        def get_mismatch(melt_f):
+            melt_f = copy.copy(melt_f)
+            # first check if the melt_f is inside limits
+            if melt_f < melt_f_limits[0]:
+                # was the smaller limit already executed, if not first do this
+                if melt_f_limits[0] not in melt_f_guess:
+                    melt_f = copy.copy(melt_f_limits[0])
+                else:
+                    # smaller limit was already used, check if it was
+                    # already newly defined with error
+                    if was_errors[0]:
+                        raise RuntimeError('Not able to minimise without '
+                                           'raising an error at lower limit of '
+                                           'melt_f!')
+                    else:
+                        # ok we set a new lower limit, consider also minimum
+                        # limit
+                        melt_f_limits[0] = max(melt_f_min,
+                                               melt_f_limits[0] -
+                                               melt_f_max_step_length)
+            elif melt_f > melt_f_limits[1]:
+                # was the larger limit already executed, if not first do this
+                if melt_f_limits[1] not in melt_f_guess:
+                    melt_f = copy.copy(melt_f_limits[1])
+                else:
+                    # larger limit was already used, check if it was
+                    # already newly defined with ice free glacier
+                    if was_errors[1]:
+                        raise RuntimeError('Not able to minimise without '
+                                           'raising an error at upper limit of '
+                                           'melt_f!')
+                    else:
+                        # ok we set a new upper limit, consider also maximum
+                        # limit
+                        melt_f_limits[1] = min(melt_f_max,
+                                               melt_f_limits[1] +
+                                               melt_f_max_step_length)
+
+            # now clip melt_f with limits (to be sure)
+            melt_f = np.clip(melt_f, melt_f_limits[0], melt_f_limits[1])
+            if melt_f in melt_f_guess:
+                raise RuntimeError('This melt_f was already tried. Probably '
+                                   'we are at one of the max or min limit and '
+                                   'still have no satisfactory mismatch '
+                                   'found!')
+
+            # if error during dynamic calibration this defines how much
+            # melt_f is changed in the upcoming iterations to look for an
+            # error free run
+            melt_f_search_change = melt_f_max_step_length / 10
+            # maximum number of changes to look for an error free run
+            max_iterations = int(melt_f_max_step_length /
+                                 melt_f_search_change)
+
+            current_min_error = False
+            current_max_error = False
+            doing_first_guess = (len(mismatch) == 0)
+            iteration = 0
+            current_melt_f = copy.copy(melt_f)
+
+            # in this loop if an error at the limits is raised we go step by
+            # step away from the limits until we are at the initial guess or we
+            # found an error free run
+            tmp_mismatch = None
+            while ((current_min_error | current_max_error | iteration == 0) &
+                   (iteration < max_iterations)):
+                try:
+                    tmp_mismatch = fct_to_minimise(melt_f)
+                except RuntimeError as e:
+                    # check if we are at the lower limit
+                    if melt_f == melt_f_limits[0]:
+                        # check if there was already an error at the lower limit
+                        if was_errors[0]:
+                            raise RuntimeError('Second time with error at '
+                                               'lower limit of melt_f! '
+                                               'Error message of model run: '
+                                               f'{e}')
+                        else:
+                            was_errors[0] = True
+                            current_min_error = True
+
+                    # check if we are at the upperlimit
+                    elif melt_f == melt_f_limits[1]:
+                        # check if there was already an error at the lower limit
+                        if was_errors[1]:
+                            raise RuntimeError('Second time with error at '
+                                               'upper limit of melt_f! '
+                                               'Error message of model run: '
+                                               f'{e}')
+                        else:
+                            was_errors[1] = True
+                            current_max_error = True
+
+                    if current_min_error:
+                        # currently we searching for a new lower limit with no
+                        # error
+                        melt_f = np.round(melt_f + melt_f_search_change,
+                                          decimals=1)
+                    elif current_max_error:
+                        # currently we searching for a new upper limit with no
+                        # error
+                        melt_f = np.round(melt_f - melt_f_search_change,
+                                          decimals=1)
+
+                    # if we end close to an already executed guess while
+                    # searching for a new limit we quite
+                    if np.isclose(melt_f, melt_f_guess).any():
+                        raise RuntimeError('Not able to further minimise, '
+                                           'return the best we have so far!'
+                                           f'Error message: {e}')
+
+                    if doing_first_guess:
+                        # unfortunately first guess is not working
+                        raise RuntimeError('Dynamic calibration is not working '
+                                           'with first guess! Error '
+                                           f'message: {e}')
+
+                    if np.isclose(melt_f, current_melt_f):
+                        # something unexpected happen so we end here
+                        raise RuntimeError('Unexpected error not at the limits'
+                                           f' of melt_f. Error Message: {e}')
+
+                iteration += 1
+
+            if iteration >= max_iterations:
+                # ok we were not able to find an mismatch without error
+                if current_min_error:
+                    raise RuntimeError('Not able to find new lower limit for '
+                                       'melt_f!')
+                elif current_max_error:
+                    raise RuntimeError('Not able to find new upper limit for '
+                                       'melt_f!')
+                else:
+                    raise RuntimeError('Something unexpected happened during '
+                                       'definition of new melt_f limits!')
+            else:
+                # if we found a new limit set it
+                if current_min_error:
+                    melt_f_limits[0] = copy.copy(melt_f)
+                elif current_max_error:
+                    melt_f_limits[1] = copy.copy(melt_f)
+
+            if tmp_mismatch is None:
+                raise RuntimeError('Not able to find a new mismatch for '
+                                   'dmdtda!')
+
+            return float(tmp_mismatch), float(melt_f)
+
+        # first guess
+        new_mismatch, new_melt_f = get_mismatch(melt_f_initial)
+        melt_f_guess.append(new_melt_f)
+        mismatch.append(new_mismatch)
+
+        if abs(mismatch[-1]) < err_ref_dmdtda:
+            return mismatch[-1], new_melt_f
+
+        # second (arbitrary) guess is given depending on the outcome of first
+        # guess, melt_f is changed for percent of mismatch relative to
+        # err_ref_dmdtda times melt_f_max_step_length (if
+        # mismatch = 2 * err_ref_dmdtda this corresponds to 100%; for 100% or
+        # 150% the next step is (-1) * melt_f_max_step_length; if mismatch
+        # -40%, next step is 0.4 * melt_f_max_step_length; but always at least
+        # an absolute change of 0.02 is imposed to prevent too close guesses).
+        # (-1) as if mismatch is negative we need a larger melt_f to get closer
+        # to 0.
+        step = (-1) * np.sign(mismatch[-1]) * \
+            max((np.abs(mismatch[-1]) - err_ref_dmdtda) / err_ref_dmdtda *
+                melt_f_max_step_length, 0.02)
+        new_mismatch, new_melt_f = get_mismatch(melt_f_guess[0] + step)
+        melt_f_guess.append(new_melt_f)
+        mismatch.append(new_mismatch)
+
+        if abs(mismatch[-1]) < err_ref_dmdtda:
+            return mismatch[-1], new_melt_f
+
+        # Now start with splin fit for guessing
+        while len(melt_f_guess) < maxiter:
+            # get next guess from splin (fit partial linear function to
+            # previously calculated (mismatch, melt_f) pairs and get melt_f
+            # value where mismatch=0 from this fitted curve)
+            sort_index = np.argsort(np.array(mismatch))
+            tck = interpolate.splrep(np.array(mismatch)[sort_index],
+                                     np.array(melt_f_guess)[sort_index],
+                                     k=1)
+            # here we catch interpolation errors (two different melt_f with
+            # same mismatch), could happen if one melt_f was close to a newly
+            # defined limit
+            if np.isnan(tck[1]).any():
+                if was_errors[0]:
+                    raise RuntimeError('Second time with error at lower '
+                                       'limit of melt_f! (nan in splin fit)')
+                elif was_errors[1]:
+                    raise RuntimeError('Second time with error at upper '
+                                       'limit of melt_f! (nan in splin fit)')
+                else:
+                    raise RuntimeError('Not able to minimise! Problem is '
+                                       'unknown. (nan in splin fit)')
+            new_mismatch, new_melt_f = get_mismatch(
+                float(interpolate.splev(0, tck)))
+            melt_f_guess.append(new_melt_f)
+            mismatch.append(new_mismatch)
+
+            if abs(mismatch[-1]) < err_ref_dmdtda:
+                return mismatch[-1], new_melt_f
+
+        # Ok when we end here the spinup could not find satisfying match after
+        # maxiter(ations)
+        raise RuntimeError(f'Could not find mismatch smaller '
+                           f'{err_ref_dmdtda} kg m-2 yr-1 (only '
+                           f'{np.min(np.abs(mismatch))} kg m-2 yr-1) in '
+                           f'{maxiter} Iterations!')
+
+    # wrapper to get values for intermediate (mismatch, melt_f) guesses if an
+    # error is raised
+    def init_minimiser():
+        melt_f_guess = []
+        mismatch = []
+
+        def minimiser(fct_to_minimise):
+            return minimise_with_spline_fit(fct_to_minimise, melt_f_guess,
+                                            mismatch)
+
+        return minimiser, melt_f_guess, mismatch
+
+    # define function for the actual minimisation
+    c_fun, models_dynamic_spinup_end = init_cost_fun()
+
+    # define minimiser
+    minimise_given_fct, melt_f_guesses, mismatch_dmdtda = init_minimiser()
+
+    try:
+        final_mismatch, final_melt_f = minimise_given_fct(c_fun)
+    except RuntimeError as e:
+        # something happened during minimisation, if there where some
+        # successful runs we return the one with the best mismatch, otherwise
+        # we conduct just a run with no dynamic spinup
+        if len(mismatch_dmdtda) == 0:
+            # we conducted no successful run, so run without dynamic spinup
+            if ignore_errors:
+                log.info('Dynamic melt_f calibration not successful. '
+                         f'Error message: {e}')
+                model_return = fallback_run(melt_f=melt_f_initial,
+                                            reset=True)
+                return model_return
+            else:
+                raise RuntimeError('Dynamic melt_f calibration was not '
+                                   f'successful! Error Message: {e}')
+        else:
+            if ignore_errors:
+                log.info('Dynamic melt_f calibration not successful. Error '
+                         f'message: {e}')
+
+                # there where some successful runs so we return the one with the
+                # smallest mismatch of dmdtda
+                min_mismatch_index = np.argmin(np.abs(mismatch_dmdtda))
+                melt_f_best = np.array(melt_f_guesses)[min_mismatch_index]
+
+                # check if the first guess was the best guess
+                only_first_guess = False
+                if min_mismatch_index == 1:
+                    only_first_guess = True
+
+                model_return = fallback_run(
+                    melt_f=melt_f_best, reset=False,
+                    best_mismatch=np.array(mismatch_dmdtda)[min_mismatch_index],
+                    initial_mismatch=mismatch_dmdtda[0],
+                    only_first_guess=only_first_guess)
+
+                return model_return
+            else:
+                raise RuntimeError('Dynamic melt_f calibration not successful. '
+                                   f'Error message: {e}')
+
+    # check that new melt_f is correctly saved in gdir
+    assert final_melt_f == gdir.read_json('mb_calib')['melt_f']
+
+    # hurray, dynamic melt_f calibration successful
+    gdir.add_to_diagnostics('used_spinup_option',
+                            'dynamic melt_f calibration (full success)')
+    gdir.add_to_diagnostics('dmdtda_mismatch_dynamic_calibration_reference',
+                            float(ref_dmdtda))
+    gdir.add_to_diagnostics('dmdtda_dynamic_calibration_given_error',
+                            float(err_ref_dmdtda))
+    gdir.add_to_diagnostics('dmdtda_dynamic_calibration_error_scaling_factor',
+                            float(err_dmdtda_scaling_factor))
+    gdir.add_to_diagnostics('dmdtda_mismatch_dynamic_calibration',
+                            float(final_mismatch))
+    gdir.add_to_diagnostics('dmdtda_mismatch_with_initial_melt_f',
+                            float(mismatch_dmdtda[0]))
+    gdir.add_to_diagnostics('melt_f_dynamic_calibration', float(final_melt_f))
+    gdir.add_to_diagnostics('melt_f_before_dynamic_calibration',
+                            float(melt_f_initial))
+    gdir.add_to_diagnostics('run_dynamic_melt_f_calibration_iterations',
+                            int(dynamic_melt_f_calibration_runs[-1]))
+
+    log.info(f'Dynamic melt_f calibration worked for {gdir.rgi_id}!')
+
+    return models_dynamic_spinup_end[-1]
+
+
+
+
+
