@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 @entity_task(log)
 def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
-                       init_model=None,
+                       init_model_geom=None,
                        climate_input_filesuffix='',
                        evolution_model=None,
                        mb_model_historical=None, mb_model_spinup=None,
@@ -232,6 +232,7 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
     # which shouldn't accumulate more ice, still adds to the total volume/area of the domain.. either mask it out beforehand or before doing plots.
     gd['cook23_thk_masked'] = xr.where(gd.glacier_mask, gd.cook23_thk, np.nan)
 
+    # load the glacier bed topography.
     bed_con = gd.topo - gd.consensus_ice_thickness.fillna(0)
     bed_cook_masked = gd.topo - gd.cook23_thk_masked.fillna(0)
     bed_cook = gd.topo - gd.cook23_thk
@@ -272,7 +273,6 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         if (target_yr - spinup_start_yr_max) > min_spinup_period:
             min_spinup_period = (target_yr - spinup_start_yr_max)
 
-    init_model_geom = None
 
     if init_model_filesuffix is not None:
         fp = gdir.get_filepath('ioggm_geometry', filesuffix=init_model_filesuffix)
@@ -285,10 +285,14 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
 
 
     if init_model_geom is None:
+        # in the original spinup this would load a
+        # 'copy' of the just done inversion(for the melt_f adaption). as we don't do an inversion we just always start
+        # from cook data or an actual geometry that is passed.
         model_geom_spinup = gd['cook23_thk_masked']
     else:
         model_geom_spinup = copy.copy(init_model_geom)
-
+    # TODO: maybe add a check if the data passed matches the resolution of the gdir
+    # utils.model_geom_is_valid(gdir, model_geom_spinup)
 
 
         # MassBalance for actual run from yr_spinup to target_yr
