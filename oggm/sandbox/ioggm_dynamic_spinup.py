@@ -1024,7 +1024,7 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                     # geom_path=geom_path,
                     # diag_path=diag_path,
                     # fl_diag_path=fl_diag_path,
-                    run_path = ioggm_diag_path
+                    diag_path=ioggm_diag_path
                     # store_monthly_step=store_monthly_step,
                 )
 
