@@ -66,6 +66,7 @@ from oggm.core.flowline import compute_fl_diagnostics_quantiles
 from oggm.core.dynamic_spinup import run_dynamic_spinup
 from oggm.core.dynamic_spinup import run_dynamic_melt_f_calibration
 from oggm.sandbox.ioggm_dynamic_spinup import run_dynamic_ioggm_spinup
+from oggm.sandbox.ioggm_dynamic_spinup import run_dynamic_ioggm_melt_f_calibration
 from oggm.utils import copy_to_basedir
 from oggm.utils import gdir_to_tar
 from oggm.utils import merge_consecutive_run_outputs
