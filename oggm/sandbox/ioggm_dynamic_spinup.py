@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
                        init_model_geom=None,
                        climate_input_filesuffix='',
+                       use_gcm_climate= False,
                        evolution_model=None,
                        mb_model_historical=None, mb_model_spinup=None,
                        spinup_period=20, spinup_start_yr=None,
