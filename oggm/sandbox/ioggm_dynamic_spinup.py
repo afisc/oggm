@@ -12,6 +12,11 @@ import xarray as xr
 # Locals
 import oggm.cfg as cfg
 from oggm import utils
+
+# workflow and gcm_climate import used for tests with GCM climate
+from oggm import workflow
+from oggm.shop import gcm_climate
+
 from oggm import entity_task
 from oggm.exceptions import InvalidParamsError, InvalidWorkflowError
 from oggm.core.massbalance import (MultipleFlowlineMassBalance,
@@ -207,6 +212,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
             If True (False)  model diagnostics will be stored monthly (yearly).
             If unspecified, we follow the update of the MB model, which
             defaults to yearly (see __init__).
+        use_gcm_climate: Bool
+            If True, a gcm climate will be loaded and used for the whole spinup.
+            The parameter 'climate_input_filesuffix' will not be used.
+            If False, the 'climate_historical' will be used.
         kwargs : dict
             kwargs to pass to the evolution_model instance
 
@@ -237,6 +246,24 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
     bed_cook_masked = gd.topo - gd.cook23_thk_masked.fillna(0)
     bed_cook = gd.topo - gd.cook23_thk
 
+    if use_gcm_climate:
+        climate_filename = 'gcm_data'
+        # load gcm climate
+        member = 'mri-esm2-0_r1i1p1f1'
+        ssp = 'ssp370'
+
+        climate_input_filesuffix = f'_ISIMIP3b_{member}_{ssp}'
+        # bias correct them
+        workflow.execute_entity_task(gcm_climate.process_monthly_isimip_data, gdir,
+                                     ssp=ssp,
+                                     # gcm member -> you can choose another one
+                                     member=member,
+                                     # recognize the climate file for later
+                                     output_filesuffix=climate_input_filesuffix
+                                     )
+
+    else:
+        climate_filename = 'climate_historical'
     # area of one gridpoint
     gridpoint_area = gdir.grid.dx**2
 
@@ -299,8 +326,12 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
     if mb_model_historical is None:
         mb_model_historical = DistributedMassBalance(
             gdir, mb_model_class=MonthlyTIModel,
-            filename='climate_historical',
-            input_filesuffix=climate_input_filesuffix)
+            filename=climate_filename,
+            input_filesuffix=climate_input_filesuffix,
+            ### parameters have been used for experimental tests in the beginning.
+            # temp_bias = 2,
+            # melt_f = 10,
+                )
 
 
     # here we define the file-paths for the output
@@ -920,8 +951,9 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                 halfsize_spinup = target_yr - y0_spinup
                 mb_model_spinup = DistributedMassBalance(
                     gdir, mb_model_class=ConstantMassBalance,
-                    filename='climate_historical',
-                    input_filesuffix=climate_input_filesuffix, y0=y0_spinup,
+                    filename=climate_filename,
+                    input_filesuffix=climate_input_filesuffix,
+                    y0=y0_spinup,
                     halfsize=halfsize_spinup,
                     use_distributed_data=True)
 
