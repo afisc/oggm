@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 from numpy import ix_
 import xarray as xr
@@ -7,6 +8,8 @@ from oggm import cfg, utils
 from oggm.cfg import G, SEC_IN_YEAR, SEC_IN_DAY
 from oggm.core.massbalance import DistributedMassBalance
 
+# Module logger
+log = logging.getLogger(__name__)
 
 def filter_ice_border(ice_thick):
     """Sets the ice thickness at the border of the domain to zero."""
@@ -223,7 +226,7 @@ class Model2D(object):
         if ite > max_ite:
             raise RuntimeError('Did not find equilibrium.')
 
-    def run_until_and_store(self, ye, step=2, run_path=None, grid=None,
+    def run_until_and_store(self, ye, step=2, geom_path=None, diag_path=None, grid=None,
                             print_stdout=False, stop_if_border=False):
         """Run until a selected year and store the output in a NetCDF file."""
 
@@ -249,10 +252,30 @@ class Model2D(object):
                                           dims=['y', 'x'])
 
         # write output?
-        if run_path:
-            if os.path.exists(run_path):
-                os.remove(run_path)
-            run_ds.to_netcdf(run_path)
+        if geom_path:
+            if os.path.exists(geom_path):
+                os.remove(geom_path)
+            run_ds.to_netcdf(geom_path)
+
+        # write and save diagnostics?
+        if diag_path:
+            if grid is None:
+                log.warning('ioggm_diagnostics for the iOGGM spinup can\'t be saved '
+                            'as the gdir.grid hasn\'t been passed to the Model2D.run_until_and_store(function)')
+            diag_ds = xr.Dataset(
+                coords={'time': run_ds.time},
+            )
+            # calculate timeserieses of volume and area
+            area_km2 = (run_ds.ice_thickness > 1).sum(dim=['x', 'y']) * (grid.dx ** 2) * 1e-6
+            volume_km3 = run_ds.ice_thickness.sum(dim=['x', 'y']) * (grid.dx ** 2) * 1e-9
+
+            diag_ds['area_km2'] = area_km2
+            diag_ds['volume_km3'] = volume_km3
+
+
+            if os.path.exists(diag_path):
+                os.remove(diag_path)
+            diag_ds.to_netcdf(diag_path)
 
         return run_ds
 
