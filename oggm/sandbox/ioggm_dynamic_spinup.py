@@ -52,6 +52,9 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                        add_fixed_geometry_spinup=False, allow_calving=False,
                        store_monthly_step=None,
                        store_all_spinup_steps=False,
+                       glen_a=None,
+                       slidingco=None,
+                       mb_filter_value=-10,
                              **kwargs):
     """
     TODO: adapt docstring to ioggm_spinup
@@ -218,6 +221,13 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
             If True, a gcm climate will be loaded and used for the whole spinup.
             The parameter 'climate_input_filesuffix' will not be used.
             If False, the 'climate_historical' will be used.
+        glen_a: float
+        the Arrhenius value that is used for the IGM-model as processes.iceflow.physics.init_arrhenius
+        slidingco: float
+        the slidingco value that is used for the IGM-model as processes.iceflow.physics.init_slidingco
+        mb_filter_value: float
+        A value to which the mass balance outside of the glacier boundary is set to. Default: -10, to suppress growth
+        outside the glacier.
         kwargs : dict
             kwargs to pass to the evolution_model instance
 
@@ -377,10 +387,14 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
     ### -----
     ### -----
 
-    fs = cfg.PARAMS['fs']
-    glen_a = cfg.PARAMS['glen_a']
+    ### This is the glen_a and fs parameter handling from the OGGM spinup
+    ### in the iOGGM spinup: glen_a and sliding_co are passed to the spinup,
+    ### otherwise the default values in IGM_Model2D
+
+    # fs = cfg.PARAMS['fs']
+    # glen_a = cfg.PARAMS['glen_a']
     # kwargs.setdefault('fs', fs) # not passing the fs parameter as it is a unknown parameter to the 2DModel
-    kwargs.setdefault('glen_a', glen_a)
+    # kwargs.setdefault('glen_a', glen_a)
 
     mb_elev_feedback = kwargs.get('mb_elev_feedback', 'annual')
     if mb_elev_feedback != 'annual':
@@ -400,7 +414,8 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                                                    init_ice_thick=model_geom_spinup.fillna(0).values,
                                                    dx=gdir.grid.dx, dy=gdir.grid.dy, x=bed_con.x, y=bed_con.y,
                                                    mb_model=mb_model_historical,
-                                                   y0=yr_use, mb_filter=gd.glacier_mask.values == 1)
+                                                   y0=yr_use, mb_filter=gd.glacier_mask.values == 1,
+                                                   glen_a=glen_a, slidingco=slidingco, mb_filter_value=mb_filter_value)
 
         with warnings.catch_warnings():
             if ye < yr_use:
@@ -496,7 +511,9 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                                                    init_ice_thick=model_geom_spinup.fillna(0).values,
                                                    dx=gdir.grid.dx, dy=gdir.grid.dy, x=bed_con.x, y=bed_con.y,
                                                    mb_model=mb_model_spinup,
-                                                   y0=yr_spinup-(2*halfsize_spinup)+1, mb_filter=gd.glacier_mask.values == 1)
+                                                   y0=yr_spinup-(2*halfsize_spinup)+1,
+                                                   mb_filter=gd.glacier_mask.values == 1,
+                                                   glen_a=glen_a, slidingco=slidingco, mb_filter_value=mb_filter_value)
         # model_spinup.run_until(2 * halfsize_spinup)
         ds_spinup = model_spinup.run_until_and_store(yr_spinup+1,
                                          geom_path=geom_path_spinup,
@@ -529,7 +546,9 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                                            init_ice_thick=model_spinup.ice_thick,
                                            dx=gdir.grid.dx, dy=gdir.grid.dy, x=bed_con.x, y=bed_con.y,
                                            mb_model=mb_model_historical,
-                                           y0=yr_spinup, mb_filter=gd.glacier_mask.values == 1, **kwargs)
+                                           y0=yr_spinup, mb_filter=gd.glacier_mask.values == 1,
+                                           glen_a = glen_a, slidingco=slidingco, mb_filter_value=mb_filter_value,
+                                           **kwargs)
         if store_model_evolution:
             # check if we need to add the min_h variable (done inplace)
             delete_area_min_h = False
