@@ -377,12 +377,14 @@ class IGM_Model2D(Model2D):
 
         # define
         if glen_a is None:
-            glen_a = cfg.PARAMS["glen_a"]
-        self.state.arrhenius = (
-                tf.ones_like(self.state.thk) * glen_a * SEC_IN_YEAR * 1e18
-        )
+            arrhenius = self.cfg.processes.iceflow.physics.init_arrhenius # default value in igm = 78.0
+        else:
+            arrhenius = glen_a
+        self.state.arrhenius =( tf.ones_like(self.state.thk) * arrhenius )
+
         if slidingco is None:
-            slidingco = 0.045
+            slidingco = self.cfg.processes.iceflow.physics.init_slidingco # default value in igm = 0.0464
+
         self.state.slidingco = tf.ones_like(self.state.thk) * slidingco
         self.state.dX = tf.ones_like(self.state.thk) * self.dx
 
