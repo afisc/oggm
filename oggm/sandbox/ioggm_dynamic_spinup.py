@@ -56,6 +56,7 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                        slidingco=None,
                        mb_filter_value=-10,
                        melt_f_iteration=None,
+                       use_flowline_inversion_reference=True,
                              **kwargs):
     """
     TODO: adapt docstring to ioggm_spinup
@@ -233,6 +234,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         Gives the number of the iteration this spinup is executed in. Default: None
         kwargs : dict
             kwargs to pass to the evolution_model instance
+        use_flowline_inversion_reference : bool
+        If True (default), the flowline inversion, calib. on Farinotti et al. 2019,
+        will be used instead of the cook23 datset(IGM Inversion).
+
 
         Returns
         -------
@@ -315,6 +320,9 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         if (target_yr - spinup_start_yr_max) > min_spinup_period:
             min_spinup_period = (target_yr - spinup_start_yr_max)
 
+    if use_flowline_inversion_reference:
+        ref_fls = gdir.read_pickle('model_flowlines',
+                         filesuffix=model_flowline_filesuffix)
 
     if init_model_filesuffix is not None:
         fp = gdir.get_filepath('ioggm_geometry', filesuffix=init_model_filesuffix)
@@ -467,7 +475,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         other_variable = 'volume'
         other_unit = 'km3'
         if target_value is None:
-            reference_value = area
+            if use_flowline_inversion_reference:
+                reference_value = np.sum([getattr(f, f'{minimise_for}_{unit}') for f in ref_fls])
+            else:
+                reference_value = area
         else:
             reference_value = target_value
         other_reference_value = volume
@@ -476,7 +487,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         other_variable = 'area'
         other_unit = 'km2'
         if target_value is None:
-            reference_value = volume
+            if use_flowline_inversion_reference:
+                reference_value = np.sum([getattr(f, f'{minimise_for}_{unit}') for f in ref_fls])
+            else:
+                reference_value = volume
         else:
             reference_value = target_value
         other_reference_value = area
