@@ -1085,9 +1085,12 @@ def dynamic_melt_f_run_with_dynamic_spinup(
         min_spinup_period=10, target_yr=None, precision_percent=1,
         precision_absolute=1, min_ice_thickness=None,
         first_guess_t_spinup=-2, t_spinup_max_step_length=2, maxiter=30,
-        store_model_geometry=True, store_diagnostics=None,
-        local_variables=None, set_local_variables=False, do_inversion=True,
+        store_model_geometry=True, store_diagnostics=None, store_diagnostics_spinup=False,
+        store_all_spinup_steps=False, store_model_geometry_spinup=False,
+        local_variables=None, set_local_variables=False, # do_inversion=True,
         spinup_start_yr_max=None, add_fixed_geometry_spinup=False,
+        use_gcm_climate=False, glen_a=None, slidingco=None, mb_filter_value=-10,
+        melt_f_iteration=None, use_flowline_inversion_reference=True,
         **kwargs):
     """
     This function is one option for a 'run_function' for the
@@ -1348,7 +1351,16 @@ def dynamic_melt_f_run_with_dynamic_spinup(
             return_t_spinup_best=True, ye=ye,
             store_model_geometry=store_model_geometry,
             store_diagnostics=store_diagnostics,
+            store_diagnostics_spinup=store_diagnostics_spinup,
+            store_all_spinup_steps=store_all_spinup_steps,
+            store_model_geometry_spinup=store_model_geometry_spinup,
             add_fixed_geometry_spinup=add_fixed_geometry_spinup,
+            use_gcm_climate=use_gcm_climate,
+            glen_a=glen_a,
+            slidingco=slidingco,
+            mb_filter_value=mb_filter_value,
+            melt_f_iteration= melt_f_iteration,
+            use_flowline_inversion_reference=use_flowline_inversion_reference,
             **kwargs)
         # save the temperature bias which was successful in the last iteration
         # as we expect we are not so far away in the next iteration (only
@@ -1948,11 +1960,12 @@ def run_dynamic_ioggm_melt_f_calibration(
     # for some run_functions this is useful to save parameters from a previous
     # run to be faster in the upcoming runs
     local_variables_run_function = {}
-    run_function(gdir=gdir, melt_f=None, yr0_ref_mb=None, yr1_ref_mb=None,
-                 geom_init=geom_init, ys=None, ye=None,
-                 local_variables=local_variables_run_function,
-                 set_local_variables=True, store_diagnostics=True,
-                 **kwargs_run_function)
+    # run_function(gdir=gdir, melt_f=None, yr0_ref_mb=None, yr1_ref_mb=None,
+    #              geom_init=geom_init, ys=None, ye=None,
+    #              local_variables=local_variables_run_function,
+    #              set_local_variables=True,
+    #             # melt_f_iteration=iteration,
+    #              **kwargs_run_function)
 
     # this is the actual model run which is executed each iteration in order to
     # minimise the mismatch of dmdtda of model and observation
@@ -1967,7 +1980,7 @@ def run_dynamic_ioggm_melt_f_calibration(
                                          geom_init=geom_init, ys=ys, ye=ye,
                                          output_filesuffix=output_filesuffix,
                                          local_variables=local_variables_run_function,
-                                         store_diagnostics=True,
+                                         melt_f_iteration=dynamic_melt_f_calibration_runs[-1],
                                          **kwargs_run_function)
         return model, dmdtda_mdl
 
