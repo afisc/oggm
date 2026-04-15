@@ -55,6 +55,7 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                        glen_a=None,
                        slidingco=None,
                        mb_filter_value=-10,
+                       melt_f_iteration=None,
                              **kwargs):
     """
     TODO: adapt docstring to ioggm_spinup
@@ -228,6 +229,8 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
         mb_filter_value: float
         A value to which the mass balance outside of the glacier boundary is set to. Default: -10, to suppress growth
         outside the glacier.
+        melt_f_iteration: int
+        Gives the number of the iteration this spinup is executed in. Default: None
         kwargs : dict
             kwargs to pass to the evolution_model instance
 
@@ -531,7 +534,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
 
             spinup_step_ds['area_km2'] = area_km2
             spinup_step_ds['volume_km3'] = volume_km3
-            step_path_spinup = ioggm_diag_path_spinup[:-3] + f'_it{forward_model_runs[-1]}.nc'
+            if melt_f_iteration is not None:
+                step_path_spinup = ioggm_diag_path_spinup[:-3] + f'_mfit{melt_f_iteration}_it{forward_model_runs[-1]}.nc'
+            else:
+                step_path_spinup = ioggm_diag_path_spinup[:-3] + f'_it{forward_model_runs[-1]}.nc'
             if os.path.exists(step_path_spinup):
                 os.remove(step_path_spinup)
             spinup_step_ds.to_netcdf(step_path_spinup)
@@ -583,7 +589,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
 
                 step_ds['area_km2'] = area_km2
                 step_ds['volume_km3'] = volume_km3
-                step_path = ioggm_diag_path[:-3] +  f'_it{forward_model_runs[-1]}.nc'
+                if melt_f_iteration is not None:
+                    step_path = ioggm_diag_path[:-3] +  f'_mfit{melt_f_iteration}_it{forward_model_runs[-1]}.nc'
+                else:
+                    step_path = ioggm_diag_path[:-3] + f'_it{forward_model_runs[-1]}.nc'
                 if os.path.exists(step_path):
                     os.remove(step_path)
                 step_ds.to_netcdf(step_path)
