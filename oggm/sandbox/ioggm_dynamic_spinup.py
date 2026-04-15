@@ -1382,10 +1382,8 @@ def dynamic_melt_f_run_with_dynamic_spinup(
         fp = gdir.get_filepath('ioggm_diagnostics',
                           filesuffix=output_filesuffix)
         ds = xr.open_dataset(fp)
-        gridpoint_area = gdir.grid.dx ** 2
-        ds['volume'] = ds.ice_thickness.sum(dim=['x', 'y']) * gridpoint_area * 1e-9
-    dmdtda_mdl = ((ds.volume.sel(time=yr1_ref_mb).item() -
-                   ds.volume.sel(time=yr0_ref_mb).item()) /
+    dmdtda_mdl = ((ds.volume_km3.sel(time=yr1_ref_mb).item() * 1e9 -
+                   ds.volume_km3.sel(time=yr0_ref_mb).item() * 1e9) /
                   gdir.rgi_area_m2 /
                   (yr1_ref_mb - yr0_ref_mb) *
                   cfg.PARAMS['ice_density'])
