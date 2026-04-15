@@ -1246,21 +1246,28 @@ def dynamic_melt_f_run_with_dynamic_spinup(
 
     from oggm.workflow import calibrate_inversion_from_consensus
 
-    if set_local_variables:
-        # clear the provided dictionary and set the first elements
-        local_variables.clear()
+    # WE HAD TO RUN A WHOLE SPINUP JUST FOR INITIALIZING THE LOCAL VARIABLES. IN THE iOGGM case this is only the
+    # 'set_local_variables'. We will do this differently.
+    # TODO: check if local_variables is emtpy. if so: add a t_spinup. else: pass
+    if len(local_variables) == 0:
         local_variables['t_spinup'] = [first_guess_t_spinup]
-        # ATTENTION: it is assumed that the flowlines in gdir have the volume
-        # we want to match during calibrate_inversion_from_consensus when we
-        # set_local_variables
 
-        # TODO here the reference volume has to be set? what reference volume? => ref volume for the inversion: ignore
-        # TODO for now
-        # fls_ref = gdir.read_pickle('model_flowlines')
-        # local_variables['vol_m3_ref'] = np.sum([f.volume_m3 for f in fls_ref])
 
-        # we are done with preparing the local_variables for the upcoming iterations
-        return None
+    # if set_local_variables:
+    #     # clear the provided dictionary and set the first elements
+    #     local_variables.clear()
+    #     local_variables['t_spinup'] = [first_guess_t_spinup]
+    #     # ATTENTION: it is assumed that the flowlines in gdir have the volume
+    #     # we want to match during calibrate_inversion_from_consensus when we
+    #     # set_local_variables
+    #
+    #     # TODO here the reference volume has to be set? what reference volume? => ref volume for the inversion: ignore
+    #     # TODO for now
+    #     # fls_ref = gdir.read_pickle('model_flowlines')
+    #     # local_variables['vol_m3_ref'] = np.sum([f.volume_m3 for f in fls_ref])
+    #
+    #     # we are done with preparing the local_variables for the upcoming iterations
+    #     return None
 
     if target_yr is None:
         target_yr = gdir.rgi_date + 1  # + 1 converted to hydro years
