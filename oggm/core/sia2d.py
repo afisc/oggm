@@ -454,6 +454,67 @@ class IGM_Model2D(Model2D):
 
         return dt_use
 
+def compute_2d_quantiles(
+    gdir,
+    input_filesuffixes,
+    filename='ioggm_geometry',
+    quantiles=0.5,
+    output_filesuffix='_median',
+):
+    """
+    Compute quantiles of all variables in a dataset across simulations.
+
+    Parameters
+    ----------
+    gdir
+        OGGM Glacier directory which holds the simulation data.
+    input_filesuffixes : list
+        List of filesuffixes to load.
+    filename : str, default: 'ioggm_geometry'
+        the base filename for the filesuffixes, e.g. 'ioggm_geometry' or 'ioggm_diagnostics'.
+    quantiles : float or sequence of float, default: 0.5
+        Quantile(s) to compute.
+    output_filesuffix : str, default: '_median'
+        Suffix for output file.
+
+    Returns
+    -------
+    None
+    new file is written to the gdir directory.
+    """
+
+    # collect all filepaths
+    paths = [
+        gdir.get_filepath(filename, filesuffix=sfx)
+        for sfx in input_filesuffixes
+    ]
+
+    # Add filename dimension
+    def add_filename_coord(ds):
+        fname = os.path.basename(ds.encoding["source"]).split(".")[0]
+        return ds.expand_dims({'filename': [fname]})
+
+    # Open all datasets together
+    ds = xr.open_mfdataset(paths, preprocess=add_filename_coord)
+
+    ds = ds.chunk(dict(filename=-1))
+
+    # Compute quantiles for all variables
+    ds_q = ds.quantile(quantiles, dim='filename')
+
+    # Remove quantile coordinate if only a single quantile is requested
+    if np.isscalar(quantiles):
+        ds_q = ds_q.drop_vars('quantile')
+
+    # Save
+    outpath = gdir.get_filepath(
+        filename,
+        filesuffix=output_filesuffix
+    )
+
+    ds_q.to_netcdf(outpath)
+
+
 class Upstream2D(Model2D):
     """Actual model"""
 
