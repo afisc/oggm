@@ -543,7 +543,7 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                 coords={'time': ds_spinup.time},
             )
             # calculate timeserieses of volume and area
-            area_km2 = (ds_spinup.ice_thickness > 2).sum(dim=['x', 'y']) * (gdir.grid.dx ** 2) * 1e-6
+            area_km2 = (ds_spinup.ice_thickness > 1).sum(dim=['x', 'y']) * (gdir.grid.dx ** 2) * 1e-6
             volume_km3 = ds_spinup.ice_thickness.sum(dim=['x', 'y']) * (gdir.grid.dx ** 2) * 1e-9
 
             spinup_step_ds['area_km2'] = area_km2
