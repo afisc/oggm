@@ -45,7 +45,10 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
                        return_t_spinup_best=False, ye=None,
                        model_flowline_filesuffix='',
                        add_fixed_geometry_spinup=False, allow_calving=False,
-                       store_monthly_step=None, **kwargs):
+                       store_monthly_step=None,
+                       store_model_geometry_spinup=False,
+                       store_diagnostics_spinup=False,
+                       **kwargs):
     """Dynamically spinup the glacier to match area or volume at the RGI date.
 
     This task allows to do simulations in the recent past (before the glacier
@@ -273,6 +276,22 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
             input_filesuffix=climate_input_filesuffix)
 
     # here we define the file-paths for the output
+
+    # paths for saving the "initial" spinup
+    if store_model_geometry_spinup:
+        geom_path_spinup = gdir.get_filepath('model_geometry',
+                                             filesuffix=output_filesuffix+'_spinup',
+                                             delete=True)
+    else:
+        geom_path_spinup = False
+
+    if store_diagnostics_spinup:
+        diag_path_spinup = gdir.get_filepath('model_diagnostics',
+                                                   filesuffix=output_filesuffix + '_spinup',
+                                                   delete=True)
+    else:
+        diag_path_spinup = False
+
     if store_model_geometry:
         geom_path = gdir.get_filepath('model_geometry',
                                       filesuffix=output_filesuffix,
@@ -417,9 +436,13 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
         # run the spinup
         model_spinup = evolution_model(copy.deepcopy(fls_spinup),
                                        mb_model_spinup,
-                                       y0=0,
+                                       y0=yr_spinup-(2*halfsize_spinup)+1,
                                        **kwargs)
-        model_spinup.run_until(2 * halfsize_spinup)
+        # modification just for the thesis
+        model_spinup.run_until_and_store(yr_spinup+1,
+                                         geom_path=geom_path_spinup,
+                                         diag_path=diag_path_spinup)
+        # model_spinup.run_until(2 * halfsize_spinup)
 
         # if glacier is completely gone return information in ice-free
         ice_free = False
