@@ -4601,6 +4601,144 @@ def clean_merged_flowlines(gdir, buffer=None):
     gdir.write_pickle(allfls, 'model_flowlines')
 
 
+def compute_diagnostics_quantiles(
+    gdir,
+    input_filesuffixes,
+    quantiles=0.5,
+    output_filesuffix='_median',
+    diag_file='fl_diagnostics',
+):
+    """Compute quantiles of diagnostics files.
+
+    This function computes quantiles (e.g. median flowline of projections) across multiple
+    diagnostics files. It supports both:
+
+    - 'fl_diagnostics' (flowline diagnostics)
+    - 'model_diagnostics' (glacier wide data)
+
+    Parameters
+    ----------
+    gdir : :py:class:`oggm.GlacierDirectory`
+        The glacier directory to process.
+    input_filesuffixes : list
+        a list of diagnostic filesuffixes which should be considered for
+        computing.
+    quantiles : float or list
+        The quantiles to compute. Could be a float for a single quantile or a
+        list of floats for severel quantile calculations.
+        Default is 0.5 (the median).
+    output_filesuffix : str
+        The filesuffix for the resulting diagnostics file.
+        Default is '_median'.
+    diag_file : str
+        Either 'fl_diagnostics' or 'model_diagnostics'.
+        Default is 'fl_diagnostics'.
+    """
+
+    if diag_file not in ['fl_diagnostics', 'model_diagnostics']:
+        raise ValueError(
+            "diag_file must be either "
+            "'fl_diagnostics' or 'model_diagnostics'"
+        )
+
+    # if quantiles is a list with one element, only use this
+    if isinstance(quantiles, list):
+        if len(quantiles) == 1:
+            quantiles = quantiles[0]
+
+    # get filepath of all diagnostics files
+    all_diag_paths = []
+    for filesuffix in input_filesuffixes:
+        all_diag_paths.append(
+            gdir.get_filepath(
+                diag_file,
+                filesuffix=filesuffix
+            )
+        )
+
+    # helper function to open all files with filename coord
+    def add_filename_coord(ds):
+        filepath = ds.encoding["source"]
+        filename = os.path.basename(filepath).split(".")[0]
+        return ds.expand_dims({'filename': [filename]})
+
+    # output path
+    output_filepath = gdir.get_filepath(
+        diag_file,
+        filesuffix=output_filesuffix
+    )
+
+# fl_diagnostics:
+    if diag_file == 'fl_diagnostics':
+
+        # assume all have the same number of flowlines
+        # extract base structure and flowline ids from first file
+        with xr.open_dataset(all_diag_paths[0]) as ds:
+            ds_base = ds.load()
+            fl_ids = ds.flowlines.data
+
+        # loop through all flowlines and compute quantiles
+        fl_diag_dss = []
+
+        for fl_id in fl_ids:
+            with xr.open_mfdataset(
+                all_diag_paths,
+                preprocess=add_filename_coord,
+                group=f'fl_{fl_id}'
+            ) as ds_fl:
+
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    fl_diag_dss.append(ds_fl.load().quantile(quantiles,
+                                                             dim='filename'))
+
+        # compression encoding
+        encoding = {}
+        for v in fl_diag_dss[0]:
+            encoding[v] = {'zlib': True, 'complevel': 5}
+
+        # preserve original structure
+        ds_base.to_netcdf(output_filepath, 'w')
+
+        for fl_id, ds in zip(fl_ids, fl_diag_dss):
+            ds.to_netcdf(
+                output_filepath,
+                'a',
+                group=f'fl_{fl_id}',
+                encoding=encoding
+            )
+
+# model diagnostics
+    elif diag_file == 'model_diagnostics':
+
+        with xr.open_mfdataset(
+            all_diag_paths,
+            preprocess=add_filename_coord,
+            combine='by_coords'
+        ) as ds:
+
+            with warnings.catch_warnings():
+                warnings.simplefilter(
+                    "ignore",
+                    category=RuntimeWarning
+                )
+
+                ds_quantile = ds.load().quantile(
+                    quantiles,
+                    dim='filename'
+                )
+
+        # compression encoding
+        encoding = {
+            v: {'zlib': True, 'complevel': 5}
+            for v in ds_quantile.data_vars
+        }
+
+        ds_quantile.to_netcdf(
+            output_filepath,
+            encoding=encoding
+        )
+# keeping the former function header and name for compability reasons.
 @entity_task(log)
 def compute_fl_diagnostics_quantiles(gdir,
                                      input_filesuffixes,
@@ -4609,70 +4747,26 @@ def compute_fl_diagnostics_quantiles(gdir,
                                      ):
     """Compute quantile fl_diagnostics (e.g. median flowline of projections)
 
-    This function takes a number of fl_diagnostic files and compute out of them
-    quantiles. This could be useful for example for calculating a median
-    flowline for different gcm projections which use the same scenario
-    (e.g. ssp126).
+        This function takes a number of fl_diagnostic files and compute out of them
+        quantiles. This could be useful for example for calculating a median
+        flowline for different gcm projections which use the same scenario
+        (e.g. ssp126).
 
-    Parameters
-    ----------
-    gdir : :py:class:`oggm.GlacierDirectory`
-        the glacier directory to process
-    input_filesuffixes : list
-        a list of fl_diagnostic filesuffixes which should be considered for
-        computing
-    quantiles : float or list
-        The quantiles to compute. Could be a float for a single quantile or a
-        list of floats for severel quantile calculations.
-        Default is 0.5 (the median).
-    output_filesuffix : str
-        The output_filesuffix of the resulting fl_diagnostics.
-        Default is '_median'.
-    """
+        Parameters
+        ----------
+        gdir : :py:class:`oggm.GlacierDirectory`
+            the glacier directory to process
+        input_filesuffixes : list
+            a list of fl_diagnostic filesuffixes which should be considered for
+            computing
+        quantiles : float or list
+            The quantiles to compute. Could be a float for a single quantile or a
+            list of floats for severel quantile calculations.
+            Default is 0.5 (the median).
+        output_filesuffix : str
+            The output_filesuffix of the resulting fl_diagnostics.
+            Default is '_median'.
+        """
 
-    # if quantiles is a list with one element, only use this
-    if isinstance(quantiles, list):
-        if len(quantiles) == 1:
-            quantiles = quantiles[0]
-
-    # get filepath of all fl_diagnostic files
-    all_fl_diag_paths = []
-    for filesuffix in input_filesuffixes:
-        all_fl_diag_paths.append(gdir.get_filepath('fl_diagnostics',
-                                                   filesuffix=filesuffix))
-
-    # assume all have the same number of flowlines, extract the base structure
-    # and number of fl_ids from the first file
-    with xr.open_dataset(all_fl_diag_paths[0]) as ds:
-        ds_base = ds.load()
-        fl_ids = ds.flowlines.data
-
-    # help function to open all fl_diag files as one with open_mfdataset
-    def add_filename_coord(ds):
-        filepath = ds.encoding["source"]
-        filename = os.path.basename(filepath).split(".")[0]
-        return ds.expand_dims({'filename': [filename]})
-
-    # now loop through all flowlines and save back in the same structure
-    fl_diag_dss = []
-    for fl_id in fl_ids:
-        with xr.open_mfdataset(all_fl_diag_paths,
-                               preprocess=lambda ds: add_filename_coord(ds),
-                               group=f'fl_{fl_id}') as ds_fl:
-            with warnings.catch_warnings():
-                # ignore warnings for NaNs
-                warnings.simplefilter("ignore", category=RuntimeWarning)
-                fl_diag_dss.append(ds_fl.load().quantile(quantiles,
-                                                         dim='filename'))
-
-    # for writing into the nice output structure
-    output_filepath = gdir.get_filepath('fl_diagnostics',
-                                        filesuffix=output_filesuffix)
-    encode = {}
-    for v in fl_diag_dss[0]:
-        encode[v] = {'zlib': True, 'complevel': 5}
-
-    ds_base.to_netcdf(output_filepath, 'w')
-    for fl_id, ds in zip(fl_ids, fl_diag_dss):
-        ds.to_netcdf(output_filepath, 'a', group='fl_{}'.format(fl_id),
-                     encoding=encode)
+    # call new, more flexible function
+    compute_diagnostics_quantiles(gdir, input_filesuffixes, quantiles, output_filesuffix)
