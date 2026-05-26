@@ -262,20 +262,21 @@ class Model2D(object):
             if grid is None:
                 log.warning('ioggm_diagnostics for the iOGGM spinup can\'t be saved '
                             'as the gdir.grid hasn\'t been passed to the Model2D.run_until_and_store(function)')
-            diag_ds = xr.Dataset(
-                coords={'time': run_ds.time},
-            )
-            # calculate timeserieses of volume and area
-            area_km2 = (run_ds.ice_thickness > 1).sum(dim=['x', 'y']) * (grid.dx ** 2) * 1e-6
-            volume_km3 = run_ds.ice_thickness.sum(dim=['x', 'y']) * (grid.dx ** 2) * 1e-9
+            else:
+                diag_ds = xr.Dataset(
+                    coords={'time': run_ds.time},
+                )
+                # calculate timeserieses of volume and area
+                area_km2 = (run_ds.ice_thickness > 1).sum(dim=['x', 'y']) * (grid.dx ** 2) * 1e-6
+                volume_km3 = run_ds.ice_thickness.sum(dim=['x', 'y']) * (grid.dx ** 2) * 1e-9
 
-            diag_ds['area_km2'] = area_km2
-            diag_ds['volume_km3'] = volume_km3
+                diag_ds['area_km2'] = area_km2
+                diag_ds['volume_km3'] = volume_km3
 
 
-            if os.path.exists(diag_path):
-                os.remove(diag_path)
-            diag_ds.to_netcdf(diag_path)
+                if os.path.exists(diag_path):
+                    os.remove(diag_path)
+                diag_ds.to_netcdf(diag_path)
 
         return run_ds
 
