@@ -528,11 +528,11 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
                                                    init_ice_thick=model_geom_spinup.fillna(0).values,
                                                    dx=gdir.grid.dx, dy=gdir.grid.dy, x=bed_con.x, y=bed_con.y,
                                                    mb_model=mb_model_spinup,
-                                                   y0=yr_spinup-(2*halfsize_spinup)+1,
+                                                   y0=0,
                                                    mb_filter=gd.glacier_mask.values == 1,
                                                    glen_a=glen_a, slidingco=slidingco, mb_filter_value=mb_filter_value)
         # model_spinup.run_until(2 * halfsize_spinup)
-        ds_spinup = model_spinup.run_until_and_store(yr_spinup+1,
+        ds_spinup = model_spinup.run_until_and_store(2 * halfsize_spinup,
                                          geom_path=geom_path_spinup,
                                          grid=gdir.grid,
                                          diag_path=ioggm_diag_path_spinup,
@@ -561,9 +561,10 @@ def run_dynamic_ioggm_spinup(gdir, init_model_filesuffix=None, init_model_yr=Non
             ice_free = True
 
         # Now conduct the actual model run to the rgi date
-
+        print('mb_model_historical temp bias: ' + str(mb_model_historical.temp_bias))
         model_historical = evolution_model(bed_con.values,
                                            init_ice_thick=model_spinup.ice_thick,
+                                           # init_ice_thick=model_geom_spinup.fillna(0).values,
                                            dx=gdir.grid.dx, dy=gdir.grid.dy, x=bed_con.x, y=bed_con.y,
                                            mb_model=mb_model_historical,
                                            y0=yr_spinup, mb_filter=gd.glacier_mask.values == 1,

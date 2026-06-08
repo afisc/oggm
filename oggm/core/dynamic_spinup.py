@@ -436,10 +436,11 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
         # run the spinup
         model_spinup = evolution_model(copy.deepcopy(fls_spinup),
                                        mb_model_spinup,
-                                       y0=yr_spinup-(2*halfsize_spinup)+1,
+                                       # y0=yr_spinup-(2*halfsize_spinup)+1,
+                                       y0=0,
                                        **kwargs)
         # modification just for the thesis
-        model_spinup.run_until_and_store(yr_spinup+1,
+        model_spinup.run_until_and_store(2 * halfsize_spinup,
                                          geom_path=geom_path_spinup,
                                          diag_path=diag_path_spinup)
         # model_spinup.run_until(2 * halfsize_spinup)
