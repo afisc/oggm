@@ -47,6 +47,7 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
                        add_fixed_geometry_spinup=False, allow_calving=False,
                        store_monthly_step=None,
                        store_model_geometry_spinup=False,
+                       store_fl_diagnostics_spinup=False,
                        store_diagnostics_spinup=False,
                        **kwargs):
     """Dynamically spinup the glacier to match area or volume at the RGI date.
@@ -285,6 +286,13 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
     else:
         geom_path_spinup = False
 
+    if store_fl_diagnostics_spinup:
+        fl_diag_path_spinup = gdir.get_filepath('fl_diagnostics',
+                                             filesuffix=output_filesuffix + '_spinup',
+                                             delete=True)
+    else:
+        fl_diag_path_spinup = False
+
     if store_diagnostics_spinup:
         diag_path_spinup = gdir.get_filepath('model_diagnostics',
                                                    filesuffix=output_filesuffix + '_spinup',
@@ -442,6 +450,7 @@ def run_dynamic_spinup(gdir, init_model_filesuffix=None, init_model_yr=None,
         # modification just for the thesis
         model_spinup.run_until_and_store(2 * halfsize_spinup,
                                          geom_path=geom_path_spinup,
+                                         fl_diag_path=fl_diag_path_spinup,
                                          diag_path=diag_path_spinup)
         # model_spinup.run_until(2 * halfsize_spinup)
 
