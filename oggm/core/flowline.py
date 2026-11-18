@@ -4671,43 +4671,72 @@ def compute_diagnostics_quantiles(
 # fl_diagnostics:
     if diag_file == 'fl_diagnostics':
 
-        # assume all have the same number of flowlines
-        # extract base structure and flowline ids from first file
+        # make quantiles iterable
+        if not isinstance(quantiles, (list, np.ndarray)):
+            quantiles = [quantiles]
+
+        # get base structure and flowline ids
         with xr.open_dataset(all_diag_paths[0]) as ds:
             ds_base = ds.load()
             fl_ids = ds.flowlines.data
 
-        # loop through all flowlines and compute quantiles
-        fl_diag_dss = []
+        for q in quantiles:
 
-        for fl_id in fl_ids:
-            with xr.open_mfdataset(
-                all_diag_paths,
-                preprocess=add_filename_coord,
-                group=f'fl_{fl_id}'
-            ) as ds_fl:
-
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", category=RuntimeWarning)
-                    fl_diag_dss.append(ds_fl.load().quantile(quantiles,
-                                                             dim='filename'))
-
-        # compression encoding
-        encoding = {}
-        for v in fl_diag_dss[0]:
-            encoding[v] = {'zlib': True, 'complevel': 5}
-
-        # preserve original structure
-        ds_base.to_netcdf(output_filepath, 'w')
-
-        for fl_id, ds in zip(fl_ids, fl_diag_dss):
-            ds.to_netcdf(
-                output_filepath,
-                'a',
-                group=f'fl_{fl_id}',
-                encoding=encoding
+            # create output filename for this quantile
+            q_output_filepath = gdir.get_filepath(
+                diag_file,
+                filesuffix=f'{output_filesuffix}_{int(q*100):03d}'
             )
 
+            fl_diag_dss = []
+
+            # compute quantile for each flowline
+            for fl_id in fl_ids:
+                with xr.open_mfdataset(
+                        all_diag_paths,
+                        preprocess=add_filename_coord,
+                        group=f'fl_{fl_id}'
+                ) as ds_fl:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter(
+                            "ignore",
+                            category=RuntimeWarning
+                        )
+
+                        ds_q = ds_fl.load().quantile(
+                            q,
+                            dim='filename'
+                        )
+
+                # remove quantile coordinate
+                ds_q = ds_q.drop_vars(
+                    'quantile',
+                    errors='ignore'
+                )
+
+                fl_diag_dss.append(ds_q)
+
+            # compression encoding
+            encoding = {}
+            for v in fl_diag_dss[0]:
+                encoding[v] = {
+                    'zlib': True,
+                    'complevel': 5
+                }
+
+            # write OGGM structure
+            ds_base.to_netcdf(
+                q_output_filepath,
+                mode='w'
+            )
+
+            for fl_id, ds in zip(fl_ids, fl_diag_dss):
+                ds.to_netcdf(
+                    q_output_filepath,
+                    mode='a',
+                    group=f'fl_{fl_id}',
+                    encoding=encoding
+                )
 # model diagnostics
     elif diag_file == 'model_diagnostics':
 
